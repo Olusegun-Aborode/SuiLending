@@ -49,7 +49,33 @@
   <script type="text/babel" src="pages.jsx"></script>
 
   <script type="text/babel" data-presets="env,react">
-    window.DATA_READY.then(function(){ ReactDOM.createRoot(document.getElementById("root")).render(<PageMarketDetail />); }).catch(function(e){ console.error(e); });
+    // Mount as soon as data.js has finished (DATA_READY always resolves —
+    // even on fetch failure — with empty-but-valid SCHEMA shape, so the
+    // dashboard chrome always renders).
+    //
+    // Watchdog: if React still hasn't mounted after 8s (e.g. an extension
+    // blocked Babel/React from CDN), clear the boot-splash silently so the
+    // user isn't staring at a frozen skeleton forever.
+    var __mounted = false;
+    setTimeout(function () {
+      if (!__mounted) {
+        var root = document.getElementById('root');
+        if (root) root.innerHTML = '';
+      }
+    }, 8000);
+
+    window.DATA_READY.then(function () {
+      try {
+        ReactDOM.createRoot(document.getElementById('root')).render(<PageMarket />);
+        __mounted = true;
+      } catch (err) {
+        console.error('[mount] render failed:', err);
+        var root = document.getElementById('root');
+        if (root) root.innerHTML = '';
+      }
+    });
   </script>
+
+
 </body>
 </html>

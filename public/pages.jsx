@@ -45,6 +45,7 @@ const ALL_PROTO_IDS = new Proxy([], {
 function PageShell({ pageId, title, terminal, headerRight, children }) {
   const [theme, setTheme] = useStateP(document.body.getAttribute('data-theme') || 'light');
   const [cmdk, setCmdk] = useStateP(false);
+  const [, forceRerender] = useStateP(0);
 
   useEffectP(() => {
     document.body.setAttribute('data-theme', theme);
@@ -60,6 +61,18 @@ function PageShell({ pageId, title, terminal, headerRight, children }) {
     return () => window.removeEventListener('keydown', h);
   }, []);
 
+  // Re-render silently if data.js auto-retries (never visible to the user).
+  useEffectP(() => {
+    const onUpdate = () => forceRerender(n => n + 1);
+    window.addEventListener('sui-lending-data-updated', onUpdate);
+    return () => window.removeEventListener('sui-lending-data-updated', onUpdate);
+  }, []);
+
+  // Defensive: D properties might be empty/undefined if the fetch failed.
+  // The dashboard renders a clean "0/$0" state in that case — no error UI.
+  const protoCount  = (D.protocols || []).length;
+  const marketCount = ((D.pools || []).length) + ((D.vaults || []).length);
+
   return (
     <>
       <Topbar title={terminal} onOpenCmdk={() => setCmdk(true)} theme={theme} setTheme={setTheme} />
@@ -69,17 +82,17 @@ function PageShell({ pageId, title, terminal, headerRight, children }) {
           <div>
             <h1 className="page-title">{title}</h1>
             <div className="page-subtitle">
-              <span className="ok">●</span> Sui mainnet · {D.protocols.length} protocols · {D.pools.length + D.vaults.length} markets · updated 2s ago
+              <span className="ok">●</span> Sui mainnet · {protoCount} protocols · {marketCount} markets · updated 2s ago
             </div>
           </div>
           {headerRight && <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>{headerRight}</div>}
         </div>
-        <Ticker items={D.ticker} />
+        <Ticker items={D.ticker || []} />
         {children}
         <div style={{ height: 40 }} />
       </main>
       <StatusBar />
-      <CommandPalette open={cmdk} onClose={() => setCmdk(false)} protocols={D.protocols} pools={D.pools} />
+      <CommandPalette open={cmdk} onClose={() => setCmdk(false)} protocols={D.protocols || []} pools={D.pools || []} />
     </>
   );
 }
