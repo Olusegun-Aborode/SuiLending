@@ -233,6 +233,26 @@ export async function GET() {
       if (idx >= 0 && idx < days) volumeSeries[idx].liquid = liquidationSeries[i].totalRepaidUsd / 1e6;
     }
 
+    // ── User counts ─────────────────────────────────────────
+    // Coarse signal: distinct borrowers in the last 30 days of liquidations,
+    // plus distinct wallet-position addresses (NAVI-only today). Not the
+    // total active-user count — but it's a real on-chain signal vs the
+    // hard-coded 0 we had before.
+    const userCountRows = (await db.$queryRawUnsafe(`
+      SELECT protocol, count(DISTINCT borrower)::int AS users
+      FROM "LiquidationEvent"
+      WHERE timestamp >= $1
+      GROUP BY protocol
+    `, since30)) as Array<{ protocol: string; users: number }>;
+    const walletPosRows = (await db.$queryRawUnsafe(`
+      SELECT protocol, count(*)::int AS users
+      FROM "WalletPosition"
+      GROUP BY protocol
+    `)) as Array<{ protocol: string; users: number }>;
+    const usersByProto: Record<string, number> = {};
+    for (const r of userCountRows) usersByProto[r.protocol] = (usersByProto[r.protocol] || 0) + r.users;
+    for (const r of walletPosRows)  usersByProto[r.protocol] = Math.max(usersByProto[r.protocol] || 0, r.users);
+
     // ── Protocol metrics (for KPI strip) ────────────────────
     const protocolMetrics = protocols.map((p) => {
       const protoLatest = latestRows.filter((r) => r.protocol === p.id);
@@ -249,7 +269,7 @@ export async function GET() {
         tvl: (supply - borrow) / 1e6,
         supply: supply / 1e6,
         borrow: borrow / 1e6,
-        users: 0, // wallet-position rollups (deferred)
+        users: usersByProto[p.id] ?? 0,
         fees,
       };
     });
