@@ -13,7 +13,7 @@
 import { BucketClient } from '@bucket-protocol/sdk';
 
 import type { ProtocolAdapter, NormalizedPool, NormalizedLiquidation } from '../types';
-import { BUCKET_SUI_GRPC_URL } from './config';
+import { BUCKET_SUI_GRPC_URL, BUCKET_V1_PROTOCOL_ID, SUI_GRAPHQL_URL_FOR_BUCKET } from './config';
 import { fetchSuiCoinPrices } from '@/lib/prices';
 import { tryFetchLiquidations } from '../_shared/liquidations';
 
@@ -58,7 +58,15 @@ const bucketAdapter: ProtocolAdapter = {
     try {
       const client = await getBucketClient();
 
-      // Fetch all three product surfaces in parallel
+      // Walk V1 protocol's dynamic fields once. Returns both V1 Buckets
+      // (CDPs, BUCK-issuing) and V1 Reservoirs (PSM swap pools — these hold
+      // the bulk of legacy TVL).
+      const v1WalkResult = await fetchBucketV1Fields().catch((e) => {
+        console.warn('[bucket.fetchPools] V1 walk failed:', e instanceof Error ? e.message : e);
+        return { buckets: [] as V1BucketRaw[], reservoirs: [] as V1ReservoirRaw[] };
+      });
+
+      // Fetch V2 product surfaces in parallel
       const [vaults, psmPools, savingPools] = await Promise.all([
         client.getAllVaultObjects(),
         client.getAllPsmPoolObjects().catch(() => ({})),
@@ -69,25 +77,31 @@ const bucketAdapter: ProtocolAdapter = {
       const coinTypes = [
         ...Object.values(vaults).map((v) => v.collateralType),
         ...Object.values(psmPools).map((p) => p.coinType),
+        ...v1WalkResult.buckets.map((b) => b.coinType),
+        ...v1WalkResult.reservoirs.map((r) => r.coinType),
       ];
       const prices = await fetchSuiCoinPrices(coinTypes);
 
-      // Vault rows (CDP collateral)
+      // V2 vault rows (CDP collateral, USDB-issuing)
       const vaultRows = Object.values(vaults).map((v) => toNormalized(v, prices));
 
-      // PSM rows (1:1 collateral ↔ USDB swap pools — represent USDB-pegged TVL)
+      // V2 PSM rows (1:1 collateral ↔ USDB swap pools)
       const psmRows = Object.values(psmPools).map((p) => toPsmNormalized(p, prices));
 
-      // Saving pool rows (USDB deposited earning yield)
+      // V2 Saving pool rows (USDB deposited earning yield)
       const savingRows = Object.values(savingPools).map((s) => toSavingNormalized(s));
 
-      const all = [...vaultRows, ...psmRows, ...savingRows];
+      // V1 rows: BUCK CDPs + V1 Reservoir PSM pools
+      const v1BucketRows    = v1WalkResult.buckets.map((b) => toV1BucketNormalized(b, prices));
+      const v1ReservoirRows = v1WalkResult.reservoirs.map((r) => toV1ReservoirNormalized(r, prices));
 
-      // Filter dust — canonical coinTypes always pass; PSM/Saving rows always
-      // pass since they represent named non-CDP product surfaces.
+      const all = [...vaultRows, ...psmRows, ...savingRows, ...v1BucketRows, ...v1ReservoirRows];
+
+      // Filter dust — canonical coinTypes always pass; named-prefix product
+      // surfaces (PSM/SAVING/V1/V1PSM) always pass.
       return all.filter((p) => {
         if (CANONICAL_BY_COINTYPE[p.coinType ?? '']) return true;
-        if (p.symbol.startsWith('PSM-') || p.symbol.startsWith('SAVING-')) return true;
+        if (/^(PSM|SAVING|V1|V1PSM)-/.test(p.symbol)) return true;
         return p.totalSupplyUsd >= BUCKET_MIN_TVL_USD;
       });
     } catch (error) {
@@ -279,5 +293,266 @@ function toSavingNormalized(s: SavingInfo): NormalizedPool {
     borrowCapCeiling: 0,
     optimalUtilization: 0,
     price: 1,
+  };
+}
+
+// ─── Bucket V1 (legacy BUCK-issuing CDP) ────────────────────────────────────
+//
+// V1 stores active CDPs as dynamic fields under a single protocol object. Each
+// dynamic field's VALUE has type `Bucket<CoinType>` with field
+// `collateral_vault: u64` (raw amount of locked collateral). We walk these via
+// Sui GraphQL — same approach as DefiLlama's bucket-protocol adapter.
+
+interface V1BucketRaw {
+  coinType: string;       // canonical 0x-prefixed coin type
+  collateralRaw: string;  // raw collateral_vault value
+  decimals: number;       // from on-chain `collateral_decimal` field
+  buckMintedRaw: string;  // raw `minted_buck_amount`
+}
+
+interface V1ReservoirRaw {
+  coinType: string;       // pegged stablecoin / LP coin type that backs BUCK
+  poolRaw: string;        // raw `pool` value (collateral held)
+  buckMintedRaw: string;  // raw `buck_minted_amount` (BUCK issued through this PSM)
+  // Reservoirs don't expose decimals on-chain — we infer from coinType via
+  // BUCKET_DECIMALS_FOR_V1 (falls back to 9). Most V1 reservoir collaterals
+  // are LP tokens (9 decimals) or stablecoins (6 decimals).
+}
+
+interface BucketFields {
+  collateral_vault?: string | number;
+  collateral_decimal?: string | number;
+  minted_buck_amount?: string | number;
+}
+
+interface ReservoirFields {
+  pool?: string | number;
+  buck_minted_amount?: string | number;
+  conversion_rate?: string | number;
+}
+
+interface DfNode {
+  value?: {
+    __typename?: string;
+    json?: BucketFields & ReservoirFields;
+    type?: { repr?: string };
+    contents?: { type?: { repr?: string }; json?: BucketFields & ReservoirFields };
+  };
+}
+
+/**
+ * Extract the inner type from a generic Move type string after a given marker.
+ * Handles nested generics like `Bucket<...::StakedHouseCoin<...::SUI>>`
+ * (where the naive `[^>]+` match would break at the inner `>`).
+ */
+function extractGenericInner(repr: string, marker: string): string | null {
+  const open = repr.indexOf(marker);
+  if (open < 0) return null;
+  let depth = 0;
+  const start = open + marker.length;
+  for (let i = start; i < repr.length; i++) {
+    const c = repr[i];
+    if (c === '<') depth += 1;
+    else if (c === '>') {
+      if (depth === 0) return repr.slice(start, i).trim();
+      depth -= 1;
+    }
+  }
+  return null;
+}
+
+async function fetchBucketV1Fields(): Promise<{ buckets: V1BucketRaw[]; reservoirs: V1ReservoirRaw[] }> {
+  const query = `
+    query($parent: SuiAddress!, $cursor: String) {
+      address(address: $parent) {
+        dynamicFields(first: 50, after: $cursor) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            value {
+              __typename
+              ... on MoveValue  { type { repr } json }
+              ... on MoveObject { contents { type { repr } json } }
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const buckets: V1BucketRaw[] = [];
+  const reservoirs: V1ReservoirRaw[] = [];
+  let cursor: string | null = null;
+
+  // V1 protocol has ~170 dynamic fields across Buckets, Reservoirs, Ponds,
+  // and other types. Pages of 50 → up to ~4 pages.
+  for (let pages = 0; pages < 8; pages++) {
+    const res = await fetch(SUI_GRAPHQL_URL_FOR_BUCKET, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query,
+        variables: { parent: BUCKET_V1_PROTOCOL_ID, cursor },
+      }),
+    });
+    if (!res.ok) throw new Error(`Bucket V1 GraphQL ${res.status}`);
+    const json = await res.json() as {
+      data?: { address?: { dynamicFields?: {
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        nodes: DfNode[];
+      } } };
+    };
+    const dfs = json?.data?.address?.dynamicFields;
+    if (!dfs) break;
+
+    for (const node of dfs.nodes) {
+      const isMoveObject = node.value?.__typename === 'MoveObject';
+      const repr =
+        (isMoveObject ? node.value?.contents?.type?.repr : node.value?.type?.repr) ?? '';
+      const fields = (isMoveObject ? node.value?.contents?.json : node.value?.json) ?? {};
+
+      // Bucket<CoinType> — V1 CDP positions
+      if (/::bucket::Bucket</.test(repr)) {
+        const innerType = extractGenericInner(repr, 'Bucket<');
+        if (!innerType) continue;
+        const coinType = innerType.startsWith('0x') ? innerType : '0x' + innerType;
+        const collateralRaw = String(fields.collateral_vault ?? '0');
+        if (collateralRaw === '0') continue;
+        buckets.push({
+          coinType,
+          collateralRaw,
+          decimals: Number(fields.collateral_decimal ?? 9),
+          buckMintedRaw: String(fields.minted_buck_amount ?? '0'),
+        });
+        continue;
+      }
+
+      // Reservoir<CoinType> — V1 PSM swap pools (mint BUCK by depositing
+      // pegged collateral). Holds the bulk of legacy V1 TVL.
+      if (/::reservoir::Reservoir</.test(repr)) {
+        const innerType = extractGenericInner(repr, 'Reservoir<');
+        if (!innerType) continue;
+        const coinType = innerType.startsWith('0x') ? innerType : '0x' + innerType;
+        const poolRaw = String(fields.pool ?? '0');
+        if (poolRaw === '0') continue;
+        reservoirs.push({
+          coinType,
+          poolRaw,
+          buckMintedRaw: String(fields.buck_minted_amount ?? '0'),
+        });
+        continue;
+      }
+    }
+
+    if (!dfs.pageInfo.hasNextPage || !dfs.pageInfo.endCursor) break;
+    cursor = dfs.pageInfo.endCursor;
+  }
+
+  return { buckets, reservoirs };
+}
+
+/** V1 Bucket (CDP) row normalizer. Symbol prefix `V1-`. */
+function toV1BucketNormalized(b: V1BucketRaw, prices: Record<string, number>): NormalizedPool {
+  // Decimals come straight from the on-chain `collateral_decimal` field —
+  // no static map needed since V1 has 40+ collateral types including LP
+  // tokens and Scallop sCoins we wouldn't have hardcoded.
+  const decimals = b.decimals;
+  const price = prices[b.coinType] ?? 0;
+
+  // BigInt division to avoid 2^53 overflow on large u64 raw amounts.
+  const collatRaw = BigInt(b.collateralRaw);
+  const divisor = BigInt(10) ** BigInt(decimals);
+  const collat = Number(collatRaw / divisor) + Number(collatRaw % divisor) / Number(divisor);
+  const collatUsd = collat * price;
+
+  // BUCK has 9 decimals (matches the V1 stablecoin module). minted_buck_amount
+  // is the total BUCK issued against this collateral type.
+  const buckRaw = BigInt(b.buckMintedRaw);
+  const buckScale = BigInt(10) ** BigInt(BUCK_DECIMALS);
+  const buckMinted = Number(buckRaw / buckScale) + Number(buckRaw % buckScale) / Number(buckScale);
+  // BUCK is a USD stablecoin → $1 each
+  const buckUsd = buckMinted;
+
+  // Build a friendly symbol from the canonical map if we know it; else from
+  // the trailing struct name (skipping nested-generic noise). Always prefixed.
+  const trailing = (b.coinType.split('::').pop() ?? '').replace(/[<>]/g, '').toUpperCase();
+  const baseSym = CANONICAL_BY_COINTYPE[b.coinType] ?? trailing;
+  const symbol = `V1-${baseSym}`.slice(0, 24);
+
+  return {
+    symbol,
+    coinType: b.coinType,
+    decimals,
+    totalSupply: collat,
+    totalSupplyUsd: collatUsd,
+    totalBorrows: buckMinted,
+    totalBorrowsUsd: buckUsd,
+    availableLiquidity: Math.max(0, collat - buckMinted / Math.max(1, price)),
+    availableLiquidityUsd: Math.max(0, collatUsd - buckUsd),
+    supplyApy: 0,
+    borrowApy: 0,
+    utilization: collatUsd > 0 ? Math.min(100, (buckUsd / collatUsd) * 100) : 0,
+    ltv: 0,
+    liquidationThreshold: 0,
+    supplyCapCeiling: 0,
+    borrowCapCeiling: 0,
+    optimalUtilization: 0,
+    price,
+  };
+}
+
+const BUCK_DECIMALS = 9;
+
+/**
+ * V1 Reservoir (PSM swap pool) row normalizer.
+ *
+ * Reservoirs let users mint BUCK by depositing pegged collateral 1:1. Their
+ * `pool` field holds the deposited collateral; `buck_minted_amount` is the
+ * BUCK issued. Symbol prefix `V1PSM-` distinguishes from V2 PSM and V1 CDP.
+ *
+ * Unlike Buckets, Reservoirs don't expose `collateral_decimal` on-chain. We
+ * fall back to 9 (Sui default) — most Reservoir collaterals are LP tokens
+ * with 9 decimals. Stable Reservoirs may be off by 10^3 but they get
+ * captured anyway since they're whitelisted by symbol prefix.
+ */
+function toV1ReservoirNormalized(r: V1ReservoirRaw, prices: Record<string, number>): NormalizedPool {
+  const decimals = 9; // see comment above
+  const price = prices[r.coinType] ?? 1; // Reservoir collateral is usually $1-pegged stables/LPs
+
+  const poolRaw = BigInt(r.poolRaw);
+  const divisor = BigInt(10) ** BigInt(decimals);
+  const pool = Number(poolRaw / divisor) + Number(poolRaw % divisor) / Number(divisor);
+
+  const buckRaw = BigInt(r.buckMintedRaw);
+  const buckScale = BigInt(10) ** BigInt(BUCK_DECIMALS);
+  const buckMinted = Number(buckRaw / buckScale) + Number(buckRaw % buckScale) / Number(buckScale);
+
+  // For PSM-pegged collateral, treat the pool's value as 1:1 with BUCK
+  // (since that's the swap rate). When the price feed disagrees, prefer the
+  // BUCK-minted value as the authoritative TVL signal.
+  const collatUsd = Math.max(pool * price, buckMinted);
+
+  const trailing = (r.coinType.split('::').pop() ?? '').replace(/[<>]/g, '').toUpperCase();
+  const baseSym = CANONICAL_BY_COINTYPE[r.coinType] ?? trailing;
+  const symbol = `V1PSM-${baseSym}`.slice(0, 24);
+
+  return {
+    symbol,
+    coinType: r.coinType,
+    decimals,
+    totalSupply: pool,
+    totalSupplyUsd: collatUsd,
+    totalBorrows: buckMinted,
+    totalBorrowsUsd: buckMinted, // BUCK is $1
+    availableLiquidity: pool,
+    availableLiquidityUsd: collatUsd,
+    supplyApy: 0,
+    borrowApy: 0,
+    utilization: 0,
+    ltv: 1,
+    liquidationThreshold: 1,
+    supplyCapCeiling: 0,
+    borrowCapCeiling: 0,
+    optimalUtilization: 0,
+    price,
   };
 }

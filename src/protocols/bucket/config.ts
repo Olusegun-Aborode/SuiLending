@@ -65,3 +65,16 @@ export default bucketConfig;
 // not set. BlockVision provides a gRPC-Web endpoint we can use here.
 export const BUCKET_SUI_GRPC_URL =
   process.env.BLOCKVISION_SUI_GRPC_WEB ?? undefined;
+
+// ─── Bucket V1 (legacy BUCK-issuing CDP) ───────────────────────────────────
+//
+// V1 still holds substantial TVL (~$45M as of April 2026) — users haven't
+// fully migrated to V2's USDB. DefiLlama's adapter walks dynamic fields under
+// this protocol object to enumerate active Bucket<CoinType> CDPs. We
+// replicate that via Sui GraphQL (same approach as AlphaLend's adapter).
+export const BUCKET_V1_PROTOCOL_ID =
+  '0x9e3dab13212b27f5434416939db5dec6a319d15b89a84fd074d03ece6350d3df';
+
+// Sui GraphQL endpoint (shared with AlphaLend adapter).
+export const SUI_GRAPHQL_URL_FOR_BUCKET =
+  process.env.SUI_GRAPHQL_URL ?? 'https://graphql.mainnet.sui.io/graphql';
