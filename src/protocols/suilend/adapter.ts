@@ -160,6 +160,18 @@ const suilendAdapter: ProtocolAdapter = {
     let cursor: { txDigest: string; eventSeq: string } | null = null;
     let pages = 0;
 
+    // First pass: collect all events into raw form so we can batch-fetch
+    // prices once at the end, instead of per-event. We pre-collect the set
+    // of distinct coinTypes we'll need to price.
+    interface RawEvt {
+      eventId: string; txDigest: string; timestamp: Date;
+      sender: string; borrower: string;
+      repayCoinType: string; withdrawCoinType: string;
+      debtAmount: number; collateralAmount: number; treasuryAmount: number;
+    }
+    const raws: RawEvt[] = [];
+    const coinTypesNeedingPrice = new Set<string>();
+
     while (pages < maxPages) {
       const page = await queryEvents(SUILEND_EVENT_TYPES.LIQUIDATE, cursor, 50, 'descending');
 
@@ -173,18 +185,15 @@ const suilendAdapter: ProtocolAdapter = {
         const withdrawCoinType = '0x' + ((j.withdraw_coin_type as { name?: string })?.name ?? '');
         if (repayCoinType === '0x' || withdrawCoinType === '0x') continue;
 
-        // Decimals — coarse mapping via known canonical assets; falls back to 9.
         const decimals = (ct: string) => DECIMAL_BY_COINTYPE[ct] ?? 9;
         const dDec = decimals(repayCoinType);
         const cDec = decimals(withdrawCoinType);
 
-        const repayRaw    = String(j.repay_amount ?? '0');
-        const withdrawRaw = String(j.withdraw_amount ?? '0');
+        const debtAmount       = Number(String(j.repay_amount    ?? '0')) / 10 ** dDec;
+        const collateralAmount = Number(String(j.withdraw_amount ?? '0')) / 10 ** cDec;
+        const treasuryAmount   = Number(String(j.protocol_fee_amount ?? '0')) / 10 ** cDec;
 
-        const debtAmount       = Number(repayRaw) / 10 ** dDec;
-        const collateralAmount = Number(withdrawRaw) / 10 ** cDec;
-
-        // Get sender as liquidator
+        // Get tx sender as liquidator (event doesn't carry it)
         let sender = '';
         try {
           const tx = await rpc<{ transaction?: { data?: { sender?: string } } }>(
@@ -193,27 +202,52 @@ const suilendAdapter: ProtocolAdapter = {
           sender = tx.transaction?.data?.sender ?? '';
         } catch {}
 
-        out.push({
-          id: eventId,
-          txDigest: evt.id.txDigest,
+        coinTypesNeedingPrice.add(repayCoinType);
+        coinTypesNeedingPrice.add(withdrawCoinType);
+
+        raws.push({
+          eventId, txDigest: evt.id.txDigest,
           timestamp: new Date(Number(evt.timestampMs)),
-          liquidator: sender,
-          borrower: String(j.obligation_id ?? ''),
-          collateralAsset: CANONICAL_BY_COINTYPE[withdrawCoinType] ?? withdrawCoinType.split('::').pop()?.toUpperCase() ?? '',
-          collateralAmount,
-          collateralPrice: 0,    // event doesn't carry price; cron may backfill via fetchSuiCoinPrices later
-          collateralUsd: 0,
-          debtAsset: CANONICAL_BY_COINTYPE[repayCoinType] ?? repayCoinType.split('::').pop()?.toUpperCase() ?? '',
-          debtAmount,
-          debtPrice: 0,
-          debtUsd: 0,
-          treasuryAmount: Number(j.protocol_fee_amount ?? 0) / 10 ** cDec,
+          sender, borrower: String(j.obligation_id ?? ''),
+          repayCoinType, withdrawCoinType,
+          debtAmount, collateralAmount, treasuryAmount,
         });
       }
 
       if (stop || !page.hasNextPage) break;
       cursor = page.nextCursor;
       pages += 1;
+    }
+
+    // Batch-fetch USD prices for every asset that appeared in events.
+    // DefiLlama's `sui:<coinType>` endpoint covers stables, BTC variants, ETH,
+    // SUI LSTs, DEEP, WAL out of the box.
+    //
+    // Note: this uses the CURRENT spot price for events that may be hours/days
+    // old — accurate within ~1-2% for recent events, less for older ones. To
+    // get exact-time prices we'd need Pyth historical or a price snapshot
+    // table (deferred).
+    const priceMap = await fetchSuiCoinPrices([...coinTypesNeedingPrice]).catch(() => ({} as Record<string, number>));
+
+    for (const r of raws) {
+      const debtPrice       = priceMap[r.repayCoinType]    ?? 0;
+      const collateralPrice = priceMap[r.withdrawCoinType] ?? 0;
+      out.push({
+        id: r.eventId,
+        txDigest: r.txDigest,
+        timestamp: r.timestamp,
+        liquidator: r.sender,
+        borrower: r.borrower,
+        collateralAsset: CANONICAL_BY_COINTYPE[r.withdrawCoinType] ?? r.withdrawCoinType.split('::').pop()?.toUpperCase() ?? '',
+        collateralAmount: r.collateralAmount,
+        collateralPrice,
+        collateralUsd: r.collateralAmount * collateralPrice,
+        debtAsset: CANONICAL_BY_COINTYPE[r.repayCoinType] ?? r.repayCoinType.split('::').pop()?.toUpperCase() ?? '',
+        debtAmount: r.debtAmount,
+        debtPrice,
+        debtUsd: r.debtAmount * debtPrice,
+        treasuryAmount: r.treasuryAmount,
+      });
     }
 
     return out;
