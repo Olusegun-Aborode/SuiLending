@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sui Lending — Overview</title>
+  <link rel="icon" href="assets/icon.png" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body data-theme="light" data-aesthetic="evolved" data-density="cozy">
+  <script>
+  (function() {
+    try {
+      var t = localStorage.getItem('theme');
+      var a = localStorage.getItem('aesthetic');
+      var d = localStorage.getItem('density');
+      if (t) document.body.setAttribute('data-theme', t);
+      if (a) document.body.setAttribute('data-aesthetic', a);
+      if (d) document.body.setAttribute('data-density', d);
+    } catch(e) {}
+  })();
+  </script>
+  <div id="root" class="shell">
+    <div class="boot-splash">
+      <div class="bs-top"><span class="bs-brand"></span><span class="bs-brand-name">datum labs</span></div>
+      <aside class="bs-side">
+        <div class="bs-line w40" style="margin-top:6px"></div>
+        <div class="bs-line w80"></div><div class="bs-line w60"></div>
+        <div class="bs-line w80"></div><div class="bs-line w60"></div>
+      </aside>
+      <main class="bs-main">
+        <div class="bs-line w40" style="width:220px;height:24px"></div>
+        <div class="bs-row"><div class="bs-card"></div><div class="bs-card"></div><div class="bs-card"></div><div class="bs-card"></div></div>
+        <div class="bs-big"></div>
+      </main>
+      <div class="bs-status">booting Overview…</div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/html-to-image@1.11.13/dist/html-to-image.js"></script>
+
+  <script src="data.js"></script>
+  <script type="text/babel" src="charts.jsx"></script>
+  <script type="text/babel" src="widgets.jsx"></script>
+  <script type="text/babel" src="shell.jsx"></script>
+  <script type="text/babel" src="pages.jsx"></script>
+
+  <script type="text/babel" data-presets="env,react">
+    window.DATA_READY.then(function(){ ReactDOM.createRoot(document.getElementById("root")).render(<PageOverview />); }).catch(function(e){ console.error(e); });
+  </script>
+</body>
+</html>
