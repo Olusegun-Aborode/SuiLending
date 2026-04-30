@@ -1,16 +1,13 @@
 // Live data loader for the Sui Lending Dashboard.
 //
-// Fetches the aggregated SCHEMA.js shape from the navi-dashboard backend.
-// The HTML pages await `window.DATA_READY` before mounting React.
-//
-// Configure the API URL by setting `window.SUI_LENDING_API_URL` BEFORE this
-// script loads (a tiny inline tag in each HTML), or edit DEFAULT_API below.
+// Backend is now same-origin (the Next.js API routes in this repo serve
+// from `/api/sui-lending`). No CORS to deal with. The HTML pages await
+// `window.DATA_READY` before mounting React.
 
 const DEFAULT_API =
-  // eslint-disable-next-line no-undef
   (typeof window !== 'undefined' && window.SUI_LENDING_API_URL) ||
-  // Override at deploy-time. Locally point at `npm run dev` of navi-dashboard.
-  'http://localhost:3457/api/sui-lending';
+  // Same-origin path served by the Next.js app in `src/app/api/sui-lending`.
+  '/api/sui-lending';
 
 /**
  * Returns a fully-shaped data object that matches SCHEMA.js. Throws on

@@ -1,0 +1,135 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Raw pool snapshot taken every ~5 minutes by the collect-pools cron.
+model PoolSnapshot {
+  id                    Int      @id @default(autoincrement())
+  protocol              String   @default("navi") @db.VarChar(20)
+  symbol                String   @db.VarChar(24)
+  timestamp             DateTime @default(now())
+  totalSupply           Float
+  totalSupplyUsd        Float
+  totalBorrows          Float
+  totalBorrowsUsd       Float
+  availableLiquidity    Float
+  availableLiquidityUsd Float
+  supplyApy             Float
+  borrowApy             Float
+  utilization           Float
+  price                 Float
+
+  @@index([protocol, symbol, timestamp])
+  @@index([protocol, timestamp])
+}
+
+/// Daily aggregated pool metrics (computed by aggregate-daily cron).
+model PoolDaily {
+  id                    Int      @id @default(autoincrement())
+  protocol              String   @default("navi") @db.VarChar(20)
+  symbol                String   @db.VarChar(24)
+  date                  DateTime @db.Date
+  avgSupplyApy          Float
+  avgBorrowApy          Float
+  avgUtilization        Float
+  closeTotalSupplyUsd   Float
+  closeTotalBorrowsUsd  Float
+  closeLiquidityUsd     Float
+  closePrice            Float
+
+  @@unique([protocol, symbol, date])
+  @@index([protocol, date])
+}
+
+/// On-chain liquidation events indexed from the blockchain.
+model LiquidationEvent {
+  id                String   @id // txDigest:eventSeq
+  protocol          String   @default("navi") @db.VarChar(20)
+  txDigest          String
+  timestamp         DateTime
+  liquidator        String   @db.VarChar(66)
+  borrower          String   @db.VarChar(66)
+  collateralAsset   String   @db.VarChar(24)
+  collateralAmount  Float
+  collateralPrice   Float
+  collateralUsd     Float
+  debtAsset         String   @db.VarChar(24)
+  debtAmount        Float
+  debtPrice         Float
+  debtUsd           Float
+  treasuryAmount    Float
+  // Gas paid by the liquidator for this tx. Populated by the
+  // `backfill-liquidation-gas` script and the `index-liquidations` cron;
+  // nullable because rows indexed before this column existed still need
+  // backfilling.
+  gasUsedMist       BigInt?
+  gasUsd            Float?
+
+  @@index([protocol, timestamp])
+  @@index([protocol, borrower])
+  @@index([protocol, liquidator])
+  @@index([protocol, collateralAsset])
+  @@index([protocol, debtAsset])
+}
+
+/// Tracked wallet positions (discovered from borrow/deposit events).
+model WalletPosition {
+  id                Int      @id @default(autoincrement())
+  protocol          String   @default("navi") @db.VarChar(20)
+  address           String   @db.VarChar(66)
+  collateralUsd     Float
+  borrowUsd         Float
+  healthFactor      Float
+  collateralAssets  String   // JSON array of symbols
+  borrowAssets      String   // JSON array of symbols
+  refreshPriority   Int      @default(3) // 0=critical, 1=warning, 2=normal, 3=safe
+  lastUpdated       DateTime @default(now())
+
+  @@unique([protocol, address])
+  @@index([protocol, refreshPriority, lastUpdated])
+  @@index([protocol, healthFactor])
+}
+
+/// Aggregated collateral<->borrow pair counts for donut charts.
+model CollateralBorrowPair {
+  id                Int      @id @default(autoincrement())
+  protocol          String   @default("navi") @db.VarChar(20)
+  collateralAsset   String   @db.VarChar(24)
+  borrowAsset       String   @db.VarChar(24)
+  count             Int
+  totalCollateralUsd Float
+  totalBorrowUsd    Float
+  updatedAt         DateTime @default(now())
+
+  @@unique([protocol, collateralAsset, borrowAsset])
+}
+
+/// Interest rate model parameters per asset (from on-chain config).
+model RateModelParams {
+  id                Int      @id @default(autoincrement())
+  protocol          String   @default("navi") @db.VarChar(20)
+  symbol            String   @db.VarChar(24)
+  baseRate          Float
+  multiplier        Float
+  jumpMultiplier    Float
+  kink              Float
+  reserveFactor     Float
+  updatedAt         DateTime @default(now())
+
+  @@unique([protocol, symbol])
+}
+
+/// DefiLlama TVL snapshots.
+model DefillamaTvl {
+  id                Int      @id @default(autoincrement())
+  protocol          String   @default("navi") @db.VarChar(20)
+  date              DateTime @db.Date
+  tvlUsd            Float
+
+  @@unique([protocol, date])
+}
