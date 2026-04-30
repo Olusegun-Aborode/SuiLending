@@ -195,6 +195,22 @@ function toNormalized(p: ScallopMarketPool, collat?: ScallopMarketCollateral): N
   const ltv                  = collat ? num((collat as { collateralFactor?: number }).collateralFactor) : 0;
   const liquidationThreshold = collat ? num((collat as { liquidationFactor?: number }).liquidationFactor) : 0;
 
+  // Scallop has a TWO-KINK piecewise model. We collapse it to our 5-knob
+  // shape using midKink as the canonical "kink", with the slope from
+  // baseBorrowApy → borrowApyOnMidKink as the multiplier and from
+  // borrowApyOnMidKink → borrowApyOnHighKink as the jumpMultiplier.
+  // Indexer's APY fields are decimals (0.0421 = 4.21%), convert to %.
+  const baseBApy   = num(p.baseBorrowApy) * 100;
+  const midKinkApy = num(p.borrowApyOnMidKink) * 100;
+  const hiKinkApy  = num(p.borrowApyOnHighKink) * 100;
+  const irm: NormalizedPool['irm'] = {
+    baseRate:       baseBApy,
+    multiplier:     Math.max(0, midKinkApy - baseBApy),
+    jumpMultiplier: Math.max(0, hiKinkApy - midKinkApy),
+    kink:           num(p.midKink),
+    reserveFactor:  num(p.reserveFactor),
+  };
+
   return {
     symbol,
     coinType: p.coinType,
@@ -212,7 +228,8 @@ function toNormalized(p: ScallopMarketPool, collat?: ScallopMarketCollateral): N
     liquidationThreshold,
     supplyCapCeiling: num(p.maxSupplyCoin),
     borrowCapCeiling: num(p.maxBorrowCoin),
-    optimalUtilization: num(p.midKink), // Scallop has two kinks; midKink is the practical "optimal"
+    optimalUtilization: num(p.midKink),
+    irm,
     price,
   };
 }

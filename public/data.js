@@ -23,7 +23,6 @@ const EMPTY_DATA = {
   volumeSeries: [],
   protocolMetrics: [],
   kpiSparks: { tvl: [], supply: [], borrow: [], revenue: [], users: [], liq: [] },
-  heatmapMetrics: { tx: [], volume: [], liquid: [] },
   liquidations: [],
   liquidationSeries: [],
   ticker: [],

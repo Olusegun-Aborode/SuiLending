@@ -199,6 +199,16 @@ function toNormalized(v: VaultInfo, prices: Record<string, number>): NormalizedP
   const borrowApy = (v.interestRate || 0) * 100;
   const supplyApy = 0;
 
+  // Bucket V2 has a flat per-vault interest rate (no kink). The IRM shape is
+  // degenerate: baseRate = the flat rate, multiplier = jumpMultiplier = 0.
+  const irm: NormalizedPool['irm'] = {
+    baseRate:       borrowApy,
+    multiplier:     0,
+    jumpMultiplier: 0,
+    kink:           0,
+    reserveFactor:  0,
+  };
+
   return {
     symbol,
     coinType,
@@ -217,6 +227,7 @@ function toNormalized(v: VaultInfo, prices: Record<string, number>): NormalizedP
     supplyCapCeiling: 0,        // CDP doesn't cap collateral deposit
     borrowCapCeiling: maxUsdb,  // cap on USDB issuance per vault
     optimalUtilization: 0,
+    irm,
     price,
   };
 }

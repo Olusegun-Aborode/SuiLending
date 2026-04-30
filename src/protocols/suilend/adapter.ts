@@ -321,9 +321,28 @@ function toNormalized(r: ParsedReserve, lstPrices: Record<string, number>): Norm
 
   // Suilend's IRM is a piecewise array of {utilPercent, aprPercent}. The kink
   // proxy is the second-to-last utilPercent (the highest pre-jump point).
+  // Map the piecewise model to our 5-knob IrmParams shape:
+  //   baseRate         = aprPercent[0]
+  //   multiplier       = aprPercent[N-2] − aprPercent[0]   (slope from 0 → kink)
+  //   jumpMultiplier   = aprPercent[N-1] − aprPercent[N-2] (slope above kink)
+  //   kink             = utilPercent[N-2] / 100
+  //   reserveFactor    = config.spreadFeeBps / 10000
   let optimalUtilization = 0;
+  let irm: NormalizedPool['irm'] | undefined;
   if (cfg?.interestRate && cfg.interestRate.length >= 2) {
-    optimalUtilization = toNum(cfg.interestRate[cfg.interestRate.length - 2]?.utilPercent) / 100;
+    const points = cfg.interestRate;
+    const N = points.length;
+    optimalUtilization = toNum(points[N - 2]?.utilPercent) / 100;
+    const baseRate       = toNum(points[0]?.aprPercent);
+    const rateAtKink     = toNum(points[N - 2]?.aprPercent);
+    const rateAtMaxUtil  = toNum(points[N - 1]?.aprPercent);
+    irm = {
+      baseRate,
+      multiplier:     Math.max(0, rateAtKink - baseRate),
+      jumpMultiplier: Math.max(0, rateAtMaxUtil - rateAtKink),
+      kink:           optimalUtilization,
+      reserveFactor:  toNum(cfg.spreadFeeBps) / 10000,
+    };
   }
 
   return {
@@ -344,6 +363,7 @@ function toNormalized(r: ParsedReserve, lstPrices: Record<string, number>): Norm
     supplyCapCeiling,
     borrowCapCeiling,
     optimalUtilization,
+    irm,
     price,
   };
 }

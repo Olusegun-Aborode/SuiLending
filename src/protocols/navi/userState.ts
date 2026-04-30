@@ -35,19 +35,17 @@ export interface NaviUserState {
   perAsset: NaviUserAssetPosition[];
 }
 
-export async function fetchNaviUserState(address: string): Promise<NaviUserState> {
-  // Stubbed — see file-level comment for context. Returns an empty position
-  // so callers don't crash; the index-wallets cron will see "no new data"
-  // and skip the row.
-  return {
-    address,
-    healthFactor: 999,
-    collateralUsd: 0,
-    borrowUsd: 0,
-    collateralAssets: [],
-    borrowAssets: [],
-    perAsset: [],
-  };
+export async function fetchNaviUserState(_address: string): Promise<NaviUserState> {
+  // Throwing — see file-level comment. The index-wallets cron's catch
+  // block bumps `lastUpdated` (so we don't hammer the function each cron
+  // tick) without overwriting the legacy data. This preserves the 1,676
+  // existing WalletPosition rows from before the consolidation deploy
+  // until a v2-compatible NAVI position fetcher exists.
+  throw new Error(
+    'NAVI userState refresh disabled in this build — @naviprotocol/lending v1 ' +
+    'is incompatible with @mysten/sui v2 (required by Suilend SDK). ' +
+    'See protocols/navi/userState.ts for re-enable guidance.'
+  );
 }
 
 /**

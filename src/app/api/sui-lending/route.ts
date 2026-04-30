@@ -253,20 +253,50 @@ export async function GET() {
     for (const r of userCountRows) usersByProto[r.protocol] = (usersByProto[r.protocol] || 0) + r.users;
     for (const r of walletPosRows)  usersByProto[r.protocol] = Math.max(usersByProto[r.protocol] || 0, r.users);
 
+    // ── DefiLlama TVL overrides ─────────────────────────────
+    // For protocols whose on-chain coverage falls short of DefiLlama's
+    // headline number (today: Bucket — its LP-tokenized collateral via
+    // Cetus/Kriya/Aftermath isn't unwrapped), we surface the canonical
+    // DefiLlama figure as `tvlDisplayed` so the dashboard shows the right
+    // total while our row-level breakdown explains what we directly index.
+    const llamaSlugs: Record<string, string> = { bucket: 'bucket-protocol' };
+    const tvlDisplayedByProto: Record<string, number> = {};
+    await Promise.all(
+      Object.entries(llamaSlugs).map(async ([proto, slug]) => {
+        try {
+          const r = await fetch(`https://api.llama.fi/tvl/${slug}`, {
+            headers: { 'Accept': 'application/json' },
+            // 5 min cache: daily TVL doesn't move enough to need fresher
+            next: { revalidate: 300 },
+          });
+          if (!r.ok) return;
+          const v = Number(await r.text());
+          if (Number.isFinite(v) && v > 0) tvlDisplayedByProto[proto] = v / 1e6; // $M
+        } catch {}
+      }),
+    );
+
     // ── Protocol metrics (for KPI strip) ────────────────────
     const protocolMetrics = protocols.map((p) => {
       const protoLatest = latestRows.filter((r) => r.protocol === p.id);
       const supply = protoLatest.reduce((s, r) => s + (r.totalSupplyUsd || 0), 0);
       const borrow = protoLatest.reduce((s, r) => s + (r.totalBorrowsUsd || 0), 0);
+      const calculatedTvl = (supply - borrow) / 1e6;
       // Coarse revenue estimate: 10% reserve × avg borrow APY × borrow / 365 → daily revenue
       // Annual: borrow × avg-bAPY × 0.10
       const avgBApy = protoLatest.length
         ? protoLatest.reduce((s, r) => s + (r.borrowApy || 0), 0) / protoLatest.length
         : 0;
       const fees = (borrow * (avgBApy / 100) * 0.10) / 1e6; // $M
+      // Override headline with DefiLlama's canonical figure when we have an
+      // entry for this protocol. Useful when our adapter only covers a subset
+      // (e.g. Bucket — LP-tokenized collateral isn't unwrapped on our side).
+      const displayedTvl = tvlDisplayedByProto[p.id] ?? calculatedTvl;
       return {
         id: p.id,
-        tvl: (supply - borrow) / 1e6,
+        tvl: displayedTvl,
+        tvlIndexed: calculatedTvl,
+        tvlSource: tvlDisplayedByProto[p.id] != null ? 'defillama' : 'on-chain',
         supply: supply / 1e6,
         borrow: borrow / 1e6,
         users: usersByProto[p.id] ?? 0,
@@ -289,13 +319,6 @@ export async function GET() {
       liq:     Array.from({ length: 30 }, (_, i) => liquidationSeries[i]?.count ?? 0),
     };
 
-    // ── Heatmap stub (no per-hour data yet) ─────────────────
-    const heatmapMetrics = {
-      tx:     Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0)),
-      volume: Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0)),
-      liquid: Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0)),
-    };
-
     // ── Ticker (snapshot prices from latest pool data) ──────
     const tickerSyms = ['SUI', 'USDC', 'USDT', 'WETH', 'WBTC', 'CETUS', 'NAVX', 'SCA'];
     const ticker = tickerSyms
@@ -314,7 +337,6 @@ export async function GET() {
       volumeSeries,
       protocolMetrics,
       kpiSparks,
-      heatmapMetrics,
       liquidations,
       liquidationSeries,
       ticker,
