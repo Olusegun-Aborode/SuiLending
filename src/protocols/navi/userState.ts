@@ -1,22 +1,45 @@
 /**
  * Per-address NAVI lending state.
  *
- * STUBBED in this consolidated repo. The original implementation called
- * `getLendingState` and `getHealthFactor` from `@naviprotocol/lending`, but
- * that SDK's bundled dist still imports `SuiClient` / `getFullnodeUrl` from
- * `@mysten/sui/client` — paths that no longer exist in @mysten/sui v2 (which
- * Suilend SDK requires). Turbopack's externals-tracing fails the build even
- * with `serverExternalPackages` set.
+ * Fetches from BlockVision's DeFi Indexing API (`/v2/sui/account/defiPortfolio`)
+ * which exposes per-address borrow / supply / rewards across all major Sui
+ * lending protocols. Uses the same `BLOCKVISION_API_KEY` (defaults to the
+ * URL-embedded key from `BLOCKVISION_SUI_RPC` for convenience) so no extra
+ * env-var setup is needed.
  *
- * Since the SuiLending dashboard's Overview / Protocol / Rates / Revenue /
- * Collateral / Liquidation pages don't depend on NAVI wallet-position data,
- * stubbing this file is the cleanest unblock. The `/api/navi/cron/index-wallets`
- * cron will return early; the existing 1,676 NAVI WalletPosition rows in the
- * DB stay queryable for the per-protocol Next.js dashboard at /navi/wallets.
- *
- * To re-enable: either find a v2-compatible @naviprotocol/lending build, or
- * call NAVI's open API + on-chain RPC directly here.
+ * History: this file used to wrap `@naviprotocol/lending`'s `getLendingState`
+ * + `getHealthFactor`, but that SDK's bundled dist imports old @mysten/sui v1
+ * paths that don't exist in v2 (which Suilend SDK requires). BlockVision
+ * gives us the same data over HTTP without the SDK churn.
  */
+
+import { getNaviPoolRegistry } from './poolRegistry';
+
+// Pull the BlockVision API key from either an explicit env var or the
+// BlockVision RPC URL (which embeds it as the path's last segment).
+function getBlockVisionKey(): string | null {
+  if (process.env.BLOCKVISION_API_KEY) return process.env.BLOCKVISION_API_KEY;
+  const rpc = process.env.BLOCKVISION_SUI_RPC;
+  if (!rpc) return null;
+  const m = rpc.match(/\/v1\/([A-Za-z0-9]+)/);
+  return m ? m[1] : null;
+}
+
+interface BlockVisionAsset {
+  coinType: string;
+  symbol: string;
+  value: number;       // USD-denominated
+  apy?: string | number;
+  logo?: string;
+}
+
+interface BlockVisionNaviResult {
+  navi?: {
+    borrow?: BlockVisionAsset[];
+    supply?: BlockVisionAsset[];
+    rewards?: BlockVisionAsset[];
+  } | null;
+}
 
 export interface NaviUserAssetPosition {
   poolId: number;
@@ -35,17 +58,104 @@ export interface NaviUserState {
   perAsset: NaviUserAssetPosition[];
 }
 
-export async function fetchNaviUserState(_address: string): Promise<NaviUserState> {
-  // Throwing — see file-level comment. The index-wallets cron's catch
-  // block bumps `lastUpdated` (so we don't hammer the function each cron
-  // tick) without overwriting the legacy data. This preserves the 1,676
-  // existing WalletPosition rows from before the consolidation deploy
-  // until a v2-compatible NAVI position fetcher exists.
-  throw new Error(
-    'NAVI userState refresh disabled in this build — @naviprotocol/lending v1 ' +
-    'is incompatible with @mysten/sui v2 (required by Suilend SDK). ' +
-    'See protocols/navi/userState.ts for re-enable guidance.'
-  );
+/**
+ * Coarse Health Factor approximation.
+ *
+ * Real HF would weight each collateral asset by its on-chain liquidation
+ * threshold and each debt asset by its borrow weight. NAVI's typical safe
+ * threshold is ~0.85 for stables / SUI / LSTs and lower for volatile
+ * assets. We use a flat 0.80 here as a conservative proxy — accurate enough
+ * to bucket wallets into refresh-priority tiers (which is what the cron
+ * actually uses HF for). A future pass could pull per-asset thresholds
+ * from `PoolSnapshot.liquidationThreshold` and weight each leg.
+ */
+const COARSE_LIQ_THRESHOLD = 0.80;
+
+function approximateHealthFactor(collateralUsd: number, borrowUsd: number): number {
+  if (borrowUsd <= 0) return 999; // no debt = safe
+  const weighted = collateralUsd * COARSE_LIQ_THRESHOLD;
+  const hf = weighted / borrowUsd;
+  return Number.isFinite(hf) ? hf : 999;
+}
+
+export async function fetchNaviUserState(address: string): Promise<NaviUserState> {
+  const key = getBlockVisionKey();
+  if (!key) {
+    throw new Error(
+      'NAVI userState requires BLOCKVISION_API_KEY (or BLOCKVISION_SUI_RPC with embedded key)',
+    );
+  }
+
+  const url = `https://api.blockvision.org/v2/sui/account/defiPortfolio?address=${address}&protocol=navi`;
+  const res = await fetch(url, { headers: { 'x-api-key': key } });
+  if (!res.ok) throw new Error(`BlockVision DeFi portfolio HTTP ${res.status}`);
+
+  const json = await res.json() as { code: number; result: BlockVisionNaviResult | null };
+  const navi = json?.result?.navi;
+
+  // BlockVision returns `navi: null` when the address has no NAVI activity at
+  // all (closed positions, never used). Treat that as a zero state — the
+  // index-wallets cron will record the wallet as inactive, which is accurate.
+  if (!navi) {
+    return {
+      address,
+      healthFactor: 999,
+      collateralUsd: 0,
+      borrowUsd: 0,
+      collateralAssets: [],
+      borrowAssets: [],
+      perAsset: [],
+    };
+  }
+
+  const supply = navi.supply ?? [];
+  const borrow = navi.borrow ?? [];
+
+  // Map BlockVision symbols → NAVI pool ids via our pool registry. If the
+  // registry doesn't recognize a symbol (a new market BlockVision indexed
+  // before we did), we still include it in the totals — just with poolId=-1.
+  const registry = await getNaviPoolRegistry().catch(() => ({} as Record<number, { symbol: string; decimals: number; price: number }>));
+  const poolIdBySymbol: Record<string, number> = {};
+  for (const [poolIdStr, pool] of Object.entries(registry)) {
+    poolIdBySymbol[(pool as { symbol: string }).symbol.toUpperCase()] = Number(poolIdStr);
+  }
+
+  const symbols = new Set<string>();
+  for (const s of supply) symbols.add(s.symbol.toUpperCase());
+  for (const b of borrow) symbols.add(b.symbol.toUpperCase());
+
+  const perAsset: NaviUserAssetPosition[] = [];
+  const collateralAssets: string[] = [];
+  const borrowAssets: string[] = [];
+  let totalCollateralUsd = 0;
+  let totalBorrowUsd = 0;
+
+  for (const sym of symbols) {
+    const supEntry = supply.find((s) => s.symbol.toUpperCase() === sym);
+    const borEntry = borrow.find((b) => b.symbol.toUpperCase() === sym);
+    const supplyUsd = Number(supEntry?.value ?? 0);
+    const borrowUsd = Number(borEntry?.value ?? 0);
+    if (supplyUsd > 0) collateralAssets.push(sym);
+    if (borrowUsd > 0) borrowAssets.push(sym);
+    totalCollateralUsd += supplyUsd;
+    totalBorrowUsd += borrowUsd;
+    perAsset.push({
+      poolId: poolIdBySymbol[sym] ?? -1,
+      symbol: sym,
+      supplyUsd,
+      borrowUsd,
+    });
+  }
+
+  return {
+    address,
+    healthFactor: approximateHealthFactor(totalCollateralUsd, totalBorrowUsd),
+    collateralUsd: totalCollateralUsd,
+    borrowUsd: totalBorrowUsd,
+    collateralAssets,
+    borrowAssets,
+    perAsset,
+  };
 }
 
 /**
