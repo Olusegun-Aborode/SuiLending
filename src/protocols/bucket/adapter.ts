@@ -13,15 +13,13 @@
 import { BucketClient } from '@bucket-protocol/sdk';
 
 import type { ProtocolAdapter, NormalizedPool, NormalizedLiquidation } from '../types';
-import { BUCKET_SUI_GRPC_URL, BUCKET_V1_PROTOCOL_ID, SUI_GRAPHQL_URL_FOR_BUCKET } from './config';
+import {
+  BUCKET_SUI_GRPC_URL, BUCKET_V1_PROTOCOL_ID, SUI_GRAPHQL_URL_FOR_BUCKET,
+  BUCKET_EVENT_TYPES,
+} from './config';
 import { fetchSuiCoinPrices } from '@/lib/prices';
 import { tryFetchLiquidations } from '../_shared/liquidations';
-
-// Bucket V2 liquidation event lives on the CDP package. The latest CDP
-// package ID changes on each upgrade — this is the current production one.
-// If liquidations stop landing, recheck against the SDK's resolved config.
-const BUCKET_LIQUIDATE_EVENT =
-  '0xc63072e7f5f4983a2efaf5bdba1480d5e7d74d57948e1c7cc436f8e22cbeb410::cdp::LiquidateEvent';
+import { queryEvents, rpc } from '@/lib/rpc';
 
 // ─── CoinType → canonical symbol ────────────────────────────────────────────
 const CANONICAL_BY_COINTYPE: Record<string, string> = {
@@ -116,19 +114,136 @@ const bucketAdapter: ProtocolAdapter = {
   },
 
   /**
-   * Best-effort liquidation indexer for Bucket V2 vault liquidations.
-   * USDB is always the debt side; collateral asset varies per vault.
-   * The shared parser handles common field names; Bucket-specific
-   * decimals lookup helps scale collateral amounts correctly.
+   * Liquidation indexer for both Bucket V2 (CDP::LiquidateEvent) and Bucket
+   * V1 (liquidate::DebtorInfo). V2 carries the standard {debt, collateral,
+   * debtor, liquidator, ...} shape that the shared parser handles. V1's
+   * shape is sparser — `{collateral: TypeName, debt: u64, debtor: address,
+   * precision: u64, price: u64}` — so it gets a custom parser below.
+   *
+   * BUCK is the V1 stablecoin (always the debt asset, $1 each). The event
+   * doesn't expose `collateral_amount` so we surface the BUCK debt repaid
+   * and let `price` populate `collateralPrice` for downstream analytics.
    */
   async fetchLiquidations({ untilEventId, maxPages = 4 } = {}): Promise<NormalizedLiquidation[]> {
-    return tryFetchLiquidations(BUCKET_LIQUIDATE_EVENT, {
-      untilEventId, maxPages,
-      decimals: BUCKET_DECIMALS,
-      symbols: CANONICAL_BY_COINTYPE,
-    });
+    const [v2, v1] = await Promise.all([
+      tryFetchLiquidations(BUCKET_EVENT_TYPES.V2_LIQUIDATE, {
+        untilEventId, maxPages,
+        decimals: BUCKET_DECIMALS,
+        symbols: CANONICAL_BY_COINTYPE,
+      }).catch((e) => {
+        console.warn('[bucket.fetchLiquidations V2]', e instanceof Error ? e.message : e);
+        return [] as NormalizedLiquidation[];
+      }),
+      fetchBucketV1Liquidations({ untilEventId, maxPages }).catch((e) => {
+        console.warn('[bucket.fetchLiquidations V1]', e instanceof Error ? e.message : e);
+        return [] as NormalizedLiquidation[];
+      }),
+    ]);
+    return [...v2, ...v1];
   },
 };
+
+// ─── Bucket V1 liquidation parser ──────────────────────────────────────────
+//
+// Verified event shape (from live RPC sample):
+//   collateral: u64   — raw amount of collateral seized
+//   debt:       u64   — raw BUCK debt repaid
+//   debtor:     address  — position owner
+//   precision:  u64   — denominator for `price` (e.g. 1e6)
+//   price:      u64   — collateral price as integer, scaled by `precision`
+//
+// Critically, the event does NOT carry the collateral coinType. V1's design
+// emits a generic `DebtorInfo` from the central `liquidate::` module
+// regardless of which Bucket<T> got liquidated. Without an additional source
+// (the surrounding tx's other events, or position lookup), we can't label
+// the collateral asset. We surface the row anyway with `collateralAsset='V1'`
+// so downstream analytics get totals (debt repaid USD, debtor count) even
+// without per-asset breakdown.
+//
+// BUCK = 9 decimals (V1 stablecoin, $1-pegged). For collateral decimals we
+// also assume 9 (most V1 collaterals are SUI / LSTs / LP tokens at 9d). This
+// makes `collateralAmount` an approximation when WETH/WBTC vaults liquidate;
+// `collateralUsd` is correct anyway since it's `amount × price`.
+async function fetchBucketV1Liquidations(
+  { untilEventId, maxPages = 4 }: { untilEventId?: string; maxPages?: number },
+): Promise<NormalizedLiquidation[]> {
+  const out: NormalizedLiquidation[] = [];
+  let cursor: { txDigest: string; eventSeq: string } | null = null;
+  let pages = 0;
+
+  while (pages < maxPages) {
+    let page;
+    try {
+      page = await queryEvents(BUCKET_EVENT_TYPES.V1_LIQUIDATE, cursor, 50, 'descending');
+    } catch (e) {
+      console.warn('[bucket V1] queryEvents failed:', e instanceof Error ? e.message : e);
+      break;
+    }
+
+    let stop = false;
+    for (const evt of page.data) {
+      const eventId = `${evt.id.txDigest}:${evt.id.eventSeq}`;
+      if (untilEventId && eventId === untilEventId) { stop = true; break; }
+
+      const j = evt.parsedJson as {
+        collateral?: string | number;
+        debt?: string | number;
+        debtor?: string;
+        precision?: string | number;
+        price?: string | number;
+      };
+
+      const collateralRaw = Number(j.collateral ?? '0');
+      const debtRaw = Number(j.debt ?? '0');
+      if (!debtRaw && !collateralRaw) continue;
+
+      // Default decimals for unknown collateral. See header comment.
+      const cDec = 9;
+      const collateralAmount = collateralRaw / 10 ** cDec;
+      const debtAmount = debtRaw / 10 ** BUCK_DECIMALS_FOR_LIQ;
+
+      const precision = Number(j.precision ?? '1') || 1;
+      const collateralPrice = Number(j.price ?? '0') / precision;
+      const collateralUsd = collateralAmount * collateralPrice;
+
+      // Liquidator: V1 event doesn't carry it — fall back to tx sender.
+      let liquidator = '';
+      try {
+        const tx = await rpc<{ transaction?: { data?: { sender?: string } } }>(
+          'sui_getTransactionBlock', [evt.id.txDigest, { showInput: true }],
+        );
+        liquidator = tx.transaction?.data?.sender ?? '';
+      } catch { /* best-effort */ }
+
+      out.push({
+        id: eventId,
+        txDigest: evt.id.txDigest,
+        timestamp: new Date(Number(evt.timestampMs)),
+        liquidator: liquidator.slice(0, 66),
+        borrower: (j.debtor ?? '').slice(0, 66),
+        // V1 event doesn't carry coinType — use a stable label so dashboard
+        // can group all V1 liquidations together without false per-asset rows.
+        collateralAsset: 'V1',
+        collateralAmount,
+        collateralPrice,
+        collateralUsd,
+        debtAsset: 'BUCK',
+        debtAmount,
+        debtPrice: 1, // BUCK is $1-pegged
+        debtUsd: debtAmount,
+        treasuryAmount: 0,
+      });
+    }
+
+    if (stop || !page.hasNextPage) break;
+    cursor = page.nextCursor;
+    pages += 1;
+  }
+
+  return out;
+}
+
+const BUCK_DECIMALS_FOR_LIQ = 9;
 
 // Decimals map for Bucket vault collateral assets. USDB is 6.
 const BUCKET_DECIMALS: Record<string, number> = {

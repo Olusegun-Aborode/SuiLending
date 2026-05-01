@@ -78,3 +78,25 @@ export const BUCKET_V1_PROTOCOL_ID =
 // Sui GraphQL endpoint (shared with AlphaLend adapter).
 export const SUI_GRAPHQL_URL_FOR_BUCKET =
   process.env.SUI_GRAPHQL_URL ?? 'https://graphql.mainnet.sui.io/graphql';
+
+// ─── Bucket on-chain event identifiers ──────────────────────────────────────
+
+// Bucket V2 CDP module — unchanged. LiquidateEvent on this package carries
+// rich liquidation fields (debt repaid, collateral seized, debtor, etc).
+export const BUCKET_V2_LIQ_PACKAGE =
+  '0xc63072e7f5f4983a2efaf5bdba1480d5e7d74d57948e1c7cc436f8e22cbeb410';
+
+// Bucket V1 liquidate module — discovered via
+// `scripts/find-liq-via-objects.mts` by walking transactions that touched
+// the V1 protocol object. The event type is `liquidate::DebtorInfo` with
+// fields {collateral: TypeName, debt: u64, debtor: address, precision: u64,
+// price: u64}. V1 liquidations don't expose `collateral_amount` directly;
+// we derive USD value from `debt × $1` (BUCK is pegged) and skip the
+// collateral leg unless we can cross-reference position state.
+export const BUCKET_V1_LIQ_PACKAGE =
+  '0x601be98dc465539a872a7e27ea1b59d60e03b0081486ee64222fcd01ddd9ad40';
+
+export const BUCKET_EVENT_TYPES = {
+  V2_LIQUIDATE: `${BUCKET_V2_LIQ_PACKAGE}::cdp::LiquidateEvent`,
+  V1_LIQUIDATE: `${BUCKET_V1_LIQ_PACKAGE}::liquidate::DebtorInfo`,
+} as const;

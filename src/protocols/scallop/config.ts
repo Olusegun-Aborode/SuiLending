@@ -61,20 +61,21 @@ export default scallopConfig;
 
 // ─── Scallop on-chain identifiers (used by adapter + cron jobs) ─────────────
 
-// Scallop's lending protocol package ID. Used to filter on-chain events for
-// the index-liquidations cron. Verify with discover-events before relying on
-// it — Scallop has shipped multiple package upgrades.
-export const SCALLOP_PACKAGE =
-  '0xefe170ec0be4d762196bedecd7a065816576198a6527c99282a2551aaa7da38c';
+// Scallop's liquidate-module package — discovered by walking transactions
+// that touched the Scallop lending market object via
+// `scripts/find-liq-via-objects.mts`. The previously-used 0xefe170ec… is
+// actually @aftermath-fi/amm (Suiscan revealed the misattribution).
+export const SCALLOP_LIQ_PACKAGE =
+  '0x6e641f0dca8aedab3101d047e96439178f16301bf0b57fe8745086ff1195eb3e';
 
-// Liquidation event type — confirm via discover-events; Scallop's docs name
-// this as `LiquidateEvent` on the protocol module.
+// Verified on-chain. Event fields:
+//   collateral_type {name}, debt_type {name},
+//   liq_amount, liquidator, obligation,
+//   repay_on_behalf, repay_revenue,
+//   collateral_price {value}, debt_price {value},
+//   timestamp
 export const SCALLOP_EVENT_TYPES = {
-  LIQUIDATE: `${SCALLOP_PACKAGE}::liquidate::LiquidateEvent`,
-  DEPOSIT:   `${SCALLOP_PACKAGE}::deposit_collateral::CollateralDepositEvent`,
-  WITHDRAW:  `${SCALLOP_PACKAGE}::withdraw_collateral::CollateralWithdrawEvent`,
-  BORROW:    `${SCALLOP_PACKAGE}::borrow::BorrowEvent`,
-  REPAY:     `${SCALLOP_PACKAGE}::repay::RepayEvent`,
+  LIQUIDATE: `${SCALLOP_LIQ_PACKAGE}::liquidate::LiquidateEventV2`,
 } as const;
 
 // Hosted SDK API base URL. The SDK defaults to this; we expose it so we can

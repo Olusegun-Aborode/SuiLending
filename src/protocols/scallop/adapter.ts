@@ -20,7 +20,7 @@ import { ScallopIndexer } from '@scallop-io/sui-scallop-sdk';
 
 import type { ProtocolAdapter, NormalizedPool, NormalizedLiquidation } from '../types';
 import { SCALLOP_INDEXER_URL, SCALLOP_EVENT_TYPES } from './config';
-import { tryFetchLiquidations } from '../_shared/liquidations';
+import { queryEvents } from '@/lib/rpc';
 
 // ─── Reserve filter ─────────────────────────────────────────────────────────
 //
@@ -103,18 +103,87 @@ const scallopAdapter: ProtocolAdapter = {
   },
 
   /**
-   * Best-effort liquidation indexer. Scallop's `LiquidateEvent` shape isn't
-   * fully verified (couldn't confirm in-conversation due to RPC rate limits);
-   * the parser below tries common field names and skips events it can't
-   * parse. Returns successfully with `indexed: 0` if no events match.
+   * Scallop liquidation indexer.
+   *
+   * Event fields (verified on-chain via `scripts/find-liq-via-objects.mts`):
+   *   collateral_type: { name: "<hex>::module::TYPE" }
+   *   debt_type:       { name: "<hex>::module::TYPE" }
+   *   liq_amount:      raw collateral seized (×10^collateralDecimals)
+   *   liquidator:      address
+   *   obligation:      borrower's obligation object id (proxy for borrower)
+   *   repay_on_behalf: raw debt repaid (×10^debtDecimals)
+   *   repay_revenue:   raw protocol fee
+   *   collateral_price.value: scaled price (precision varies — Pyth-style 8d)
+   *   debt_price.value:       scaled price
+   *   timestamp:       seconds
    */
   async fetchLiquidations({ untilEventId, maxPages = 4 } = {}): Promise<NormalizedLiquidation[]> {
-    return tryFetchLiquidations(SCALLOP_EVENT_TYPES.LIQUIDATE, {
-      untilEventId,
-      maxPages,
-      decimals: SCALLOP_DECIMALS,
-      symbols: CANONICAL_BY_COINTYPE,
-    });
+    const out: NormalizedLiquidation[] = [];
+    let cursor: { txDigest: string; eventSeq: string } | null = null;
+    let pages = 0;
+
+    while (pages < maxPages) {
+      const page = await queryEvents(SCALLOP_EVENT_TYPES.LIQUIDATE, cursor, 50, 'descending');
+
+      let stop = false;
+      for (const evt of page.data) {
+        const eventId = `${evt.id.txDigest}:${evt.id.eventSeq}`;
+        if (untilEventId && eventId === untilEventId) { stop = true; break; }
+
+        const j = evt.parsedJson as {
+          collateral_type?: { name?: string };
+          debt_type?: { name?: string };
+          liq_amount?: string;
+          liquidator?: string;
+          obligation?: string;
+          repay_on_behalf?: string;
+          collateral_price?: { value?: string };
+          debt_price?: { value?: string };
+        };
+
+        const cTypeRaw = j.collateral_type?.name ?? '';
+        const dTypeRaw = j.debt_type?.name ?? '';
+        if (!cTypeRaw || !dTypeRaw) continue;
+        const cCoinType = '0x' + cTypeRaw;
+        const dCoinType = '0x' + dTypeRaw;
+
+        const cDec = SCALLOP_DECIMALS[cCoinType] ?? 9;
+        const dDec = SCALLOP_DECIMALS[dCoinType] ?? 9;
+
+        const collateralAmount = Number(j.liq_amount       ?? '0') / 10 ** cDec;
+        const debtAmount       = Number(j.repay_on_behalf  ?? '0') / 10 ** dDec;
+
+        // Scallop's price.value is a fixed-point integer at Pyth's typical
+        // 1e-(price_decimals) scale. The SDK normalizes this to USD; without
+        // it, divide by 1e-decimals heuristically. For SCA at 0.0708…, the
+        // raw value 70849136 implies divide by 1e9 → $0.0708. Use that.
+        const collateralPrice = Number(j.collateral_price?.value ?? '0') / 1e9;
+        const debtPrice       = Number(j.debt_price?.value       ?? '0') / 1e9;
+
+        out.push({
+          id: eventId,
+          txDigest: evt.id.txDigest,
+          timestamp: new Date(Number(evt.timestampMs)),
+          liquidator: (j.liquidator ?? '').slice(0, 66),
+          borrower:   (j.obligation ?? '').slice(0, 66),
+          collateralAsset: (CANONICAL_BY_COINTYPE[cCoinType] ?? cCoinType.split('::').pop()?.toUpperCase() ?? '').slice(0, 24),
+          collateralAmount,
+          collateralPrice,
+          collateralUsd: collateralAmount * collateralPrice,
+          debtAsset: (CANONICAL_BY_COINTYPE[dCoinType] ?? dCoinType.split('::').pop()?.toUpperCase() ?? '').slice(0, 24),
+          debtAmount,
+          debtPrice,
+          debtUsd: debtAmount * debtPrice,
+          treasuryAmount: 0,
+        });
+      }
+
+      if (stop || !page.hasNextPage) break;
+      cursor = page.nextCursor;
+      pages += 1;
+    }
+
+    return out;
   },
 };
 

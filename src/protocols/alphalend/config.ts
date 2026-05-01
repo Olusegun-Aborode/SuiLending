@@ -73,14 +73,28 @@ export const ALPHALEND_LENDING_PROTOCOL_ID =
 export const ALPHALEND_MARKETS_TABLE_ID =
   '0x2326d387ba8bb7d24aa4cfa31f9a1e58bf9234b097574afb06c5dfb267df4c2e';
 
-// Liquidation events live on the FIRST package (which is the contract's
-// permanent address). PositionCap struct also lives there.
+// Liquidation events on AlphaLend are wrapped in a generic `events::Event<T>`
+// envelope: the on-chain emit_event call is `events::emit_event(LiquidationEvent {...})`,
+// which produces a typed event whose Move type is
+// `events::Event<alpha_lending::LiquidationEvent>` (NOT `alpha_lending::
+// LiquidationEvent` directly). The parsedJson is therefore wrapped as
+// `{ event: { repay_type, withdraw_type, ... } }`.
+//
+// Verified via on-chain `sui_getNormalizedMoveModule` against the latest package
+// (struct definitions live in `alpha_lending` module). The event type uses the
+// FIRST package address — Sui events keep their originating package ID across
+// upgrades.
+//
+// Sibling event `LpLiquidationEvent` covers LP-collateral liquidations and
+// adds `coin_a_amount, coin_b_amount, lp_position_id, pool_id` fields. Index
+// both for full coverage.
 export const ALPHALEND_EVENT_TYPES = {
-  LIQUIDATE: `${ALPHALEND_FIRST_PACKAGE}::lending_protocol::LiquidationEvent`,
-  DEPOSIT:   `${ALPHALEND_FIRST_PACKAGE}::lending_protocol::DepositEvent`,
-  BORROW:    `${ALPHALEND_FIRST_PACKAGE}::lending_protocol::BorrowEvent`,
-  REPAY:     `${ALPHALEND_FIRST_PACKAGE}::lending_protocol::RepayEvent`,
-  WITHDRAW:  `${ALPHALEND_FIRST_PACKAGE}::lending_protocol::WithdrawEvent`,
+  LIQUIDATE:    `${ALPHALEND_FIRST_PACKAGE}::events::Event<${ALPHALEND_FIRST_PACKAGE}::alpha_lending::LiquidationEvent>`,
+  LIQUIDATE_LP: `${ALPHALEND_FIRST_PACKAGE}::events::Event<${ALPHALEND_FIRST_PACKAGE}::alpha_lending::LpLiquidationEvent>`,
+  DEPOSIT:      `${ALPHALEND_FIRST_PACKAGE}::events::Event<${ALPHALEND_FIRST_PACKAGE}::alpha_lending::DepositEvent>`,
+  BORROW:       `${ALPHALEND_FIRST_PACKAGE}::events::Event<${ALPHALEND_FIRST_PACKAGE}::alpha_lending::BorrowEvent>`,
+  REPAY:        `${ALPHALEND_FIRST_PACKAGE}::events::Event<${ALPHALEND_FIRST_PACKAGE}::alpha_lending::RepayEvent>`,
+  WITHDRAW:     `${ALPHALEND_FIRST_PACKAGE}::events::Event<${ALPHALEND_FIRST_PACKAGE}::alpha_lending::WithdrawEvent>`,
 } as const;
 
 // Sui public GraphQL endpoint — the same one AlphaLend SDK uses by default.

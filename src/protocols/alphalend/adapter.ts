@@ -19,7 +19,7 @@
 import type { ProtocolAdapter, NormalizedPool, NormalizedLiquidation } from '../types';
 import { ALPHALEND_MARKETS_TABLE_ID, SUI_GRAPHQL_URL, ALPHALEND_EVENT_TYPES } from './config';
 import { fetchSuiCoinPrices } from '@/lib/prices';
-import { tryFetchLiquidations } from '../_shared/liquidations';
+import { queryEvents, rpc } from '@/lib/rpc';
 
 // ─── CoinType → canonical symbol ────────────────────────────────────────────
 const CANONICAL_BY_COINTYPE: Record<string, string> = {
@@ -94,18 +94,146 @@ const alphalendAdapter: ProtocolAdapter = {
   },
 
   /**
-   * Best-effort liquidation indexer. AlphaLend's `LiquidationEvent` shape
-   * is not yet verified end-to-end (RPC rate limit blocked the discovery
-   * probe); the shared parser will skip events it can't extract a
-   * borrower + asset pair from.
+   * AlphaLend liquidation indexer. Events are wrapped in `events::Event<T>`
+   * (Sui's typed-event envelope), so `parsedJson` looks like:
+   *   { event: { repay_type, withdraw_type, repay_amount, withdraw_amount,
+   *              repay_value, withdraw_value, position_id, ... } }
+   *
+   * Both `LiquidationEvent` (single-asset collateral) and `LpLiquidationEvent`
+   * (LP-token collateral) get indexed. LP shape adds `coin_a_amount` /
+   * `coin_b_amount` / `pool_id` which we surface as collateral side via the
+   * primary leg (`coin_a_*`); a future pass could split into two rows.
+   *
+   * `*_value` fields are the on-chain USD values scaled by 1e9 (AlphaLend's
+   * standard precision constant). Using these means we don't need a separate
+   * price lookup — collateralUsd / debtUsd come straight from the event.
    */
   async fetchLiquidations({ untilEventId, maxPages = 4 } = {}): Promise<NormalizedLiquidation[]> {
-    return tryFetchLiquidations(ALPHALEND_EVENT_TYPES.LIQUIDATE, {
-      untilEventId, maxPages,
-      symbols: CANONICAL_BY_COINTYPE,
-    });
+    const [single, lp] = await Promise.all([
+      fetchAlphalendLiquidations(ALPHALEND_EVENT_TYPES.LIQUIDATE, false, untilEventId, maxPages)
+        .catch((e) => { console.warn('[alphalend.LIQUIDATE]', e instanceof Error ? e.message : e); return []; }),
+      fetchAlphalendLiquidations(ALPHALEND_EVENT_TYPES.LIQUIDATE_LP, true, untilEventId, maxPages)
+        .catch((e) => { console.warn('[alphalend.LIQUIDATE_LP]', e instanceof Error ? e.message : e); return []; }),
+    ]);
+    return [...single, ...lp];
   },
 };
+
+// AlphaLend coinType → decimals. Matches the canonical-symbol map above.
+const ALPHALEND_DECIMALS: Record<string, number> = {
+  '0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI': 9,
+  '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC': 6,
+  '0x375f70cf2ae4c00bf37117d0c85a2c71545e6ee05c4a5c7d282cd66a4504b068::usdt::USDT': 6,
+  '0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08c::coin::COIN': 6,
+  '0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN': 6,
+  '0xbde4ba4c2e274a60ce15c1cfff9e5c42e41654ac8b6d906a57efa4bd3c29f47d::hasui::HASUI': 9,
+  '0xf325ce1300e8dac124071d3152c5c5ee6174914f8bc2161e88329cf579246efc::afsui::AFSUI': 9,
+  '0x83556891f4a0f233ce7b05cfe7f957d4020492a34f5405b2cb9377d060bef4bf::spring_sui::SPRING_SUI': 9,
+  '0x549e8b69270defbfafd4f94e17ec44cdbdd99820b33bda2278dea3b9a32d3f55::cert::CERT': 9,
+  '0xdeeb7a4662eec9f2f3def03fb937a663dddaa2e215b8078a284d026b7946c270::deep::DEEP': 6,
+  '0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL': 9,
+};
+
+// AlphaLend's `*_value` fields use a fixed 1e9 USD-scale precision constant
+// (verified from `alpha_lending` module source at AlphaFiTech/alphalend-
+// contracts-interfaces). Same scale applies across LiquidationEvent and
+// LpLiquidationEvent.
+const ALPHALEND_VALUE_PRECISION = 1e9;
+
+interface AlphalendLiqInner {
+  repay_type?: { name?: string };
+  withdraw_type?: { name?: string };
+  position_id?: string;
+  liquidator?: string;          // not actually emitted; tx sender is fallback
+  repay_amount?: string;
+  repay_value?: string;
+  withdraw_amount?: string;
+  withdraw_value?: string;
+  // LP variant
+  coin_a_amount?: string;
+  coin_b_amount?: string;
+  lp_position_id?: string;
+  pool_id?: string;
+}
+
+async function fetchAlphalendLiquidations(
+  eventType: string,
+  isLpVariant: boolean,
+  untilEventId: string | undefined,
+  maxPages: number,
+): Promise<NormalizedLiquidation[]> {
+  const out: NormalizedLiquidation[] = [];
+  let cursor: { txDigest: string; eventSeq: string } | null = null;
+  let pages = 0;
+
+  while (pages < maxPages) {
+    const page = await queryEvents(eventType, cursor, 50, 'descending');
+    let stop = false;
+    for (const evt of page.data) {
+      const eventId = `${evt.id.txDigest}:${evt.id.eventSeq}`;
+      if (untilEventId && eventId === untilEventId) { stop = true; break; }
+
+      // Sui un-wraps `events::Event<T>` automatically: parsedJson is
+      // either { event: { ...inner } } (some node implementations) or the
+      // inner fields flattened (others). Handle both.
+      const raw = evt.parsedJson as { event?: AlphalendLiqInner } & AlphalendLiqInner;
+      const j: AlphalendLiqInner = raw.event ?? raw;
+
+      const cTypeRaw = j.withdraw_type?.name;
+      const dTypeRaw = j.repay_type?.name;
+      if (!cTypeRaw || !dTypeRaw) continue;
+      const cCoinType = cTypeRaw.startsWith('0x') ? cTypeRaw : '0x' + cTypeRaw;
+      const dCoinType = dTypeRaw.startsWith('0x') ? dTypeRaw : '0x' + dTypeRaw;
+
+      const cDec = ALPHALEND_DECIMALS[cCoinType] ?? 9;
+      const dDec = ALPHALEND_DECIMALS[dCoinType] ?? 9;
+
+      // For LP variant, withdraw_amount represents LP units; coin_a_amount
+      // is the larger leg of the underlying pair. We still use withdraw_value
+      // (USD-denominated) as the authoritative collateral USD.
+      const collateralAmount =
+        isLpVariant && j.coin_a_amount
+          ? Number(j.coin_a_amount) / 10 ** cDec
+          : Number(j.withdraw_amount ?? '0') / 10 ** cDec;
+      const debtAmount = Number(j.repay_amount ?? '0') / 10 ** dDec;
+      const collateralUsd = Number(j.withdraw_value ?? '0') / ALPHALEND_VALUE_PRECISION;
+      const debtUsd       = Number(j.repay_value    ?? '0') / ALPHALEND_VALUE_PRECISION;
+
+      // Liquidator is not emitted on the event — fall back to tx sender.
+      let liquidator = '';
+      try {
+        const tx = await rpc<{ transaction?: { data?: { sender?: string } } }>(
+          'sui_getTransactionBlock', [evt.id.txDigest, { showInput: true }],
+        );
+        liquidator = tx.transaction?.data?.sender ?? '';
+      } catch { /* best-effort */ }
+
+      out.push({
+        id: eventId,
+        txDigest: evt.id.txDigest,
+        timestamp: new Date(Number(evt.timestampMs)),
+        liquidator: liquidator.slice(0, 66),
+        // position_id is the borrower-equivalent (NFT cap holding position state)
+        borrower: (j.position_id ?? j.lp_position_id ?? '').slice(0, 66),
+        collateralAsset: (CANONICAL_BY_COINTYPE[cCoinType] ?? cCoinType.split('::').pop()?.toUpperCase() ?? '').slice(0, 24),
+        collateralAmount,
+        collateralPrice: collateralAmount > 0 ? collateralUsd / collateralAmount : 0,
+        collateralUsd,
+        debtAsset: (CANONICAL_BY_COINTYPE[dCoinType] ?? dCoinType.split('::').pop()?.toUpperCase() ?? '').slice(0, 24),
+        debtAmount,
+        debtPrice: debtAmount > 0 ? debtUsd / debtAmount : 0,
+        debtUsd,
+        treasuryAmount: 0,
+      });
+    }
+
+    if (stop || !page.hasNextPage) break;
+    cursor = page.nextCursor;
+    pages += 1;
+  }
+
+  return out;
+}
 
 export default alphalendAdapter;
 
