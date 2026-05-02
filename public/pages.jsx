@@ -233,7 +233,7 @@ function PageOverview() {
   const liq30d = D.liquidations.length;
 
   return (
-    <PageShell pageId="overview" title="State of Lending on Sui — Overview" terminal="sui-lending-overview">
+    <PageShell pageId="overview" title="Lending Terminal: SUI — Overview" terminal="lending-terminal-sui-overview">
       <KpiStrip items={[
         { id: 'tvl',    label: 'Total Value Locked', value: fmtUSD(totalTvl * 1e6, 1), change: 4.82, spark: D.kpiSparks.tvl.slice(-30) },
         { id: 'supply', label: 'Total Supplied',     value: fmtUSD(totalSupply * 1e6, 1), change: 5.10, spark: D.kpiSparks.supply.slice(-30) },
@@ -492,7 +492,7 @@ function PageRates() {
   const avgUtil   = weighted(D.pools, 'util', 'supply');
 
   return (
-    <PageShell pageId="rates" title="Rates — Supply, Borrow, Utilization" terminal="sui-lending-rates">
+    <PageShell pageId="rates" title="Rates — Supply, Borrow, Utilization" terminal="lending-terminal-sui-rates">
       <KpiStrip items={[
         { id: 'sup',  label: 'Weighted Avg Supply APY', value: `${avgSupply.toFixed(2)}%`, change: 0.18, subLabel: 'across pool protocols' },
         { id: 'bor',  label: 'Weighted Avg Borrow APY', value: `${avgBorrow.toFixed(2)}%`, change: 0.24, subLabel: 'across pool protocols' },
@@ -621,7 +621,7 @@ function PageRevenue() {
   const totalFees30d = rows.reduce((s,r) => s + r.fees30d, 0);
 
   return (
-    <PageShell pageId="revenue" title="Revenue — Protocol Fees & Reserves" terminal="sui-lending-revenue">
+    <PageShell pageId="revenue" title="Revenue — Protocol Fees & Reserves" terminal="lending-terminal-sui-revenue">
       <KpiStrip items={[
         { id: 'r30',  label: 'Total Fees (30D)',  value: fmtUSD(totalFees30d, 2), change: 2.18, spark: D.kpiSparks.revenue.slice(-30) },
         { id: 'rann', label: 'Run-Rate (Annual)', value: fmtUSD(totalFees30d * 365 / 30, 1), change: 1.92 },
@@ -734,7 +734,7 @@ function PageCollateral() {
   };
 
   return (
-    <PageShell pageId="collateral" title="Collateral — Composition & Concentration" terminal="sui-lending-collateral">
+    <PageShell pageId="collateral" title="Collateral — Composition & Concentration" terminal="lending-terminal-sui-collateral">
       <KpiStrip items={[
         { id: 'tot',  label: 'Total Collateral',  value: fmtUSD(totalCollat * 1e6, 1), change: 4.6, subLabel: 'across all protocols' },
         { id: 'top',  label: 'Top Asset',         value: allAssetRows[0].sym, change: 0, subLabel: `${(allAssetRows[0].value / totalCollat * 100).toFixed(1)}%` },
@@ -843,7 +843,7 @@ function PageLiquidation() {
   const fmt = (s) => new Date(s).toLocaleString(undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 
   return (
-    <PageShell pageId="liquidation" title="Liquidations — Events & Severity" terminal="sui-lending-liquidation">
+    <PageShell pageId="liquidation" title="Liquidations — Events & Severity" terminal="lending-terminal-sui-liquidation">
       <KpiStrip items={[
         { id: 'cnt', label: 'Liquidations (30D)', value: fmtNum(allEvents.length, 0), change: -2.1, subLabel: 'count' },
         { id: 'rep', label: 'Total Debt Repaid',  value: fmtUSD(totalRepaid, 1), change: -3.4 },

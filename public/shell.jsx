@@ -60,7 +60,7 @@ function Sidebar({ current }) {
 
   const sections = [
     {
-      label: 'Sui Lending',
+      label: 'Lending Terminal: SUI',
       items: [
         { ...PAGES[0], count: null },
         { ...PAGES[1], count: String(protoCount) },
@@ -116,7 +116,7 @@ function StatusBar() {
     <div className="statusbar">
       <div className="left">
         <span style={{ color: 'var(--orange)' }}>❯</span>
-        <span>datumlabs.xyz / sui-lending</span>
+        <span>datumlabs.xyz / lending-terminal-sui</span>
         <span className="sep">│</span>
         <span>cache: <span style={{ color: 'var(--green)' }}>healthy</span></span>
         <span className="sep">│</span>
