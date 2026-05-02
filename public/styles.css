@@ -378,6 +378,30 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 }
 .theme-toggle button.active { background: var(--surface); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
 
+/* Chart timeframe toggle (7D/30D/90D segmented control).
+   Visually adjacent to the metric/protocol dropdowns inside .chart-tools,
+   so it borrows the same height + neutral background. Active button gets
+   the orange accent so the current window is glanceable from across the
+   panel. */
+.timeframe-toggle {
+  display: inline-flex; align-items: center;
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 2px; height: 24px;
+}
+.timeframe-toggle button {
+  font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 0 8px; height: 20px; border-radius: 4px;
+  color: var(--fg-muted); background: transparent;
+  border: none; cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.timeframe-toggle button:hover { color: var(--fg); }
+.timeframe-toggle button.active {
+  background: var(--surface); color: var(--orange);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+}
+
 /* Sidebar */
 .sidebar {
   background: var(--surface-2);

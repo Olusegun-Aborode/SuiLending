@@ -142,10 +142,19 @@ function ProtocolChip({ id }) {
 // ────────────────────────────────────────────────────────────────
 // ChartPanel — wraps a chart with protocol/metric dropdowns + actions
 // ────────────────────────────────────────────────────────────────
-//   protocolMode: 'single' (incl. an "All" option) | 'multi' | 'none'
-//   metricItems:  optional [{ id, label, short? }]
-//   className:    'col-4' | 'col-6' | 'col-8' | etc — for grid layout
-//   render({ proto, metric, size }):  size is 'normal' | 'expanded'
+//   protocolMode:   'single' (incl. an "All" option) | 'multi' | 'none'
+//   metricItems:    optional [{ id, label, short? }]
+//   timeframes:     optional [7, 30, 90] (or any integer day-count list).
+//                   When provided, renders a small segmented toggle and the
+//                   render callback receives `timeframe` (in days).
+//   defaultTimeframe: which entry of `timeframes` to start on. Defaults to
+//                   the LAST one (i.e. the longest window) so the chart
+//                   shows the most context out of the box.
+//   caption:        optional one-line description rendered under the title.
+//                   Useful for charts whose meaning isn't obvious from the
+//                   title alone (e.g. treemaps, custom composites).
+//   className:      'col-4' | 'col-6' | 'col-8' | etc — for grid layout
+//   render({ proto, metric, size, timeframe }):  size is 'normal'|'expanded'
 // ────────────────────────────────────────────────────────────────
 function ChartPanel({
   title,                      // string OR ({ proto, metric }) => string
@@ -153,6 +162,9 @@ function ChartPanel({
   defaultProto,
   metricItems,
   defaultMetric,
+  timeframes,
+  defaultTimeframe,
+  caption,
   className = '',
   render,
 }) {
@@ -161,6 +173,11 @@ function ChartPanel({
     : (protocolMode === 'multi' ? ALL_PROTO_IDS : 'all');
   const [proto, setProto]   = useStateP(initialProto);
   const [metric, setMetric] = useStateP(defaultMetric ?? metricItems?.[0]?.id);
+  // Pick a default timeframe — last in the list (longest window) when not
+  // specified. Stored even when `timeframes` is undefined so the render
+  // callback can default-spread it cleanly.
+  const initialTf = defaultTimeframe ?? (timeframes ? timeframes[timeframes.length - 1] : null);
+  const [timeframe, setTimeframe] = useStateP(initialTf);
   const [expanded, setExpanded] = useStateP(false);
   const ref = useRefP(null);
 
@@ -176,8 +193,24 @@ function ChartPanel({
     <>
       <div className={`panel ${className}`} ref={ref}>
         <div className="panel-header">
-          <span className="panel-title"><span className="bullet">●</span> {resolvedTitle}</span>
+          <span className="panel-title">
+            <span className="bullet">●</span> {resolvedTitle}
+            {caption && <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 400, color: 'var(--fg-muted)', textTransform: 'none', letterSpacing: 0 }}>{caption}</span>}
+          </span>
           <div className="chart-tools" data-snapshot-skip="true">
+            {timeframes && (
+              <div className="timeframe-toggle" role="tablist" aria-label="Timeframe">
+                {timeframes.map(tf => (
+                  <button key={tf} role="tab"
+                    className={timeframe === tf ? 'active' : ''}
+                    aria-selected={timeframe === tf}
+                    onClick={() => setTimeframe(tf)}
+                    title={`Last ${tf} days`}>
+                    {tf}D
+                  </button>
+                ))}
+              </div>
+            )}
             {metricItems && (
               <Dropdown label="Data" value={metric} items={metricItems} onChange={setMetric} />
             )}
@@ -196,10 +229,10 @@ function ChartPanel({
             </button>
           </div>
         </div>
-        <div className="panel-body">{render({ proto, metric, size: 'normal' })}</div>
+        <div className="panel-body">{render({ proto, metric, size: 'normal', timeframe })}</div>
       </div>
       <ExpandModal open={expanded} onClose={() => setExpanded(false)} title={resolvedTitle}>
-        {render({ proto, metric, size: 'expanded' })}
+        {render({ proto, metric, size: 'expanded', timeframe })}
       </ExpandModal>
     </>
   );
@@ -252,15 +285,18 @@ function PageOverview() {
             { id: 'borrow',  label: 'Borrowed' },
             { id: 'revenue', label: 'Revenue' },
           ]}
-          render={({ proto, metric, size }) => {
+          timeframes={[7, 30, 90]}
+          render={({ proto, metric, size, timeframe }) => {
             const w = size === 'expanded' ? 1200 : 820;
             const h = size === 'expanded' ? 560 : 320;
             const src = D.tvlMetricSeries[metric] || D.tvlSeries;
+            // Slice each per-protocol series to the active timeframe window.
+            // Source series carry 90 days, so 7/30/90 always have data.
             const series = D.protocols
               .filter(p => proto.includes(p.id))
               .map(p => ({
                 name: p.name, color: p.color,
-                values: src[D.protocols.indexOf(p)].slice(-30).map(x => x.value),
+                values: src[D.protocols.indexOf(p)].slice(-timeframe).map(x => x.value),
               }));
             return <AreaChart series={series} stacked width={w} height={h} formatter={fmtUSD} valueSuffix="M" />;
           }}
@@ -270,6 +306,7 @@ function PageOverview() {
           title="Protocol Mix"
           className="col-4"
           protocolMode="none"
+          caption="— share of each protocol in today's totals"
           metricItems={[
             { id: 'tvl',    label: 'By TVL' },
             { id: 'supply', label: 'By Supplied' },
@@ -282,7 +319,8 @@ function PageOverview() {
               const m = D.protocolMetrics.find(x => x.id === p.id);
               return { id: p.id, name: p.name, value: m[metric] || m.tvl, color: p.color };
             });
-            return <Treemap items={items} width={w} height={h} />;
+            const valueLabel = metric === 'tvl' ? 'TVL' : metric === 'supply' ? 'Supplied' : 'Borrowed';
+            return <Treemap items={items} width={w} height={h} valueLabel={valueLabel} />;
           }}
         />
       </div>
@@ -298,14 +336,17 @@ function PageOverview() {
             { id: 'liquid',  label: 'Liquidations only' },
           ]}
           defaultMetric="all"
-          render={({ metric, size }) => {
+          timeframes={[7, 30, 90]}
+          render={({ metric, size, timeframe }) => {
             const w = size === 'expanded' ? 1200 : 1200;
             const h = size === 'expanded' ? 520 : 240;
             const keys = metric === 'all' ? ['supply','borrow','liquid'] : [metric];
             const colors = metric === 'all'
               ? ['#FF6B35', '#3B5FE0', '#D6322E']
               : [metric === 'supply' ? '#FF6B35' : metric === 'borrow' ? '#3B5FE0' : '#D6322E'];
-            return <StackedBarChart data={D.volumeSeries} keys={keys} colors={colors} width={w} height={h} formatter={v => `$${v.toFixed(1)}M`} />;
+            // volumeSeries carries 90 daily rows; slice tail by the active window.
+            const sliced = D.volumeSeries.slice(-timeframe);
+            return <StackedBarChart data={sliced} keys={keys} colors={colors} width={w} height={h} formatter={v => `$${v.toFixed(1)}M`} />;
           }}
         />
       </div>

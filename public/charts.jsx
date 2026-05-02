@@ -42,7 +42,11 @@ function AreaChart({ series, stacked = false, width = 800, height = 280, formatt
   const padL = 54, padR = 18, padT = 12, padB = 28;
   const w = width, h = height;
   const iw = w - padL - padR, ih = h - padT - padB;
-  const [hover, setHover] = useState(null); // { x, i }
+  // hover carries: i (data index), x (svg x of the data point), my (raw mouse y in
+  // SVG-space) so the tooltip can follow the cursor vertically. The previous
+  // version pinned the tooltip at top:10 which sat on top of the data near the
+  // peak of the chart. Tracking my fixes that.
+  const [hover, setHover] = useState(null);
 
   const len = series[0]?.values.length || 0;
   if (!len) return null;
@@ -102,11 +106,17 @@ function AreaChart({ series, stacked = false, width = 800, height = 280, formatt
 
   const onMove = (e) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
+    // Convert client coords → svg viewBox coords (rect width may differ from
+    // viewBox `w` because the SVG is `width="100%"`). Scaling both axes by the
+    // same factor keeps the cursor-following tooltip honest across breakpoints.
+    const sx = w / rect.width;
+    const sy = h / rect.height;
+    const mx = (e.clientX - rect.left) * sx;
+    const my = (e.clientY - rect.top) * sy;
     const rel = (mx - padL) / iw;
     if (rel < -0.02 || rel > 1.02) { setHover(null); return; }
     const i = Math.max(0, Math.min(len - 1, Math.round(rel * (len - 1))));
-    setHover({ i, x: x(i) });
+    setHover({ i, x: x(i), my });
   };
 
   return (
@@ -155,26 +165,44 @@ function AreaChart({ series, stacked = false, width = 800, height = 280, formatt
         )}
         <ChartWatermark x={w - 20} y={padT + 16} />
       </svg>
-      {hover && (
-        <div className="chart-tooltip" style={{
-          left: Math.min(hover.x + 12, w - 180),
-          top: 10,
-        }}>
-          <div className="t-date">{daysAgoLabel(hover.i, len)}</div>
-          {series.map(s => (
-            <div key={s.name} className="t-row">
-              <span className="t-label"><span className="legend-swatch" style={{ background: s.color, marginRight: 6 }} />{s.name}</span>
-              <span>{formatter(s.values[hover.i], 2)}{valueSuffix}</span>
-            </div>
-          ))}
-          {overlayPaths.map(p => (
-            <div key={p.name} className="t-row">
-              <span className="t-label"><span className="legend-swatch" style={{ background: p.color, marginRight: 6, borderStyle: 'dashed' }} />{p.name}</span>
-              <span>{formatter(p.values[hover.i], 2)}{valueSuffix}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      {hover && (() => {
+        // Convert tooltip x/y from svg-space back to css px so absolute
+        // positioning lines up with the rendered chart at any width. Right-edge
+        // clamp keeps the tooltip readable; vertical clamp avoids the tooltip
+        // hanging off the bottom of the panel.
+        const cssX = Math.min((hover.x + 14) / w * 100, 100 - 22);
+        const cssY = Math.max(2, Math.min((hover.my - 12) / h * 100, 100 - 30));
+        const total = series.reduce((s, ser) => s + ser.values[hover.i], 0);
+        return (
+          <div className="chart-tooltip" style={{
+            left: `${cssX}%`,
+            top: `${cssY}%`,
+          }}>
+            <div className="t-date">{daysAgoLabel(hover.i, len)}</div>
+            {series.map(s => (
+              <div key={s.name} className="t-row">
+                <span className="t-label"><span className="legend-swatch" style={{ background: s.color, marginRight: 6 }} />{s.name}</span>
+                <span>{formatter(s.values[hover.i], 2)}{valueSuffix}</span>
+              </div>
+            ))}
+            {overlayPaths.map(p => (
+              <div key={p.name} className="t-row">
+                <span className="t-label"><span className="legend-swatch" style={{ background: p.color, marginRight: 6, borderStyle: 'dashed' }} />{p.name}</span>
+                <span>{formatter(p.values[hover.i], 2)}{valueSuffix}</span>
+              </div>
+            ))}
+            {/* Total row — only meaningful for stacked charts (otherwise it'd
+                be the sum of unrelated series). Keeps the tooltip honest about
+                what's an aggregate vs. a slice. */}
+            {stacked && series.length > 1 && (
+              <div className="t-row" style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.2)' }}>
+                <span className="t-label">TOTAL</span>
+                <span>{formatter(total, 2)}{valueSuffix}</span>
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -261,9 +289,15 @@ function StackedBarChart({ data, keys, colors, width = 800, height = 220, format
 
 // ── Treemap ──────────────────────────────────────────────
 // Simple squarified treemap
-function Treemap({ items, width = 400, height = 280, onSelect, selectedId }) {
+function Treemap({ items, width = 400, height = 280, onSelect, selectedId, formatter, valueLabel = '' }) {
   // items: [{id, name, value, color}]
   const total = items.reduce((a, b) => a + b.value, 0);
+  // Hover state for the tooltip. Tracks both the rect being hovered (for
+  // dim-others styling) and the cursor px so the tooltip follows the mouse.
+  const [hover, setHover] = useState(null);
+  // Default formatter mirrors the inline labels: values are millions, shown
+  // as $X.XM. Callers can override (e.g. counts vs. dollars).
+  const fmt = formatter || ((v) => fmtUSD(v * 1e6, 2));
 
   function squarify(items, x, y, w, h) {
     if (!items.length) return [];
@@ -315,30 +349,76 @@ function Treemap({ items, width = 400, height = 280, onSelect, selectedId }) {
   const sorted = [...items].sort((a, b) => b.value - a.value);
   const rects = squarify(sorted, 0, 0, width, height);
 
+  // Track cursor position in svg-space so tooltip follows.
+  const onMove = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const sx = width / rect.width, sy = height / rect.height;
+    const mx = (e.clientX - rect.left) * sx;
+    const my = (e.clientY - rect.top) * sy;
+    // Find which rect contains the cursor. The squarify rects are non-overlapping
+    // so first hit wins; with ~5 protocols this is cheap enough every move.
+    const hit = rects.find(r => mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h);
+    if (hit) setHover({ id: hit.id, mx, my });
+    else setHover(null);
+  };
+
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} style={{ display: 'block' }}>
-      {rects.map(r => {
+    <div style={{ position: 'relative' }}>
+      <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} style={{ display: 'block' }}
+        onMouseMove={onMove} onMouseLeave={() => setHover(null)}
+      >
+        {rects.map(r => {
+          const pct = (r.value / total * 100).toFixed(1);
+          const big = r.w > 70 && r.h > 40;
+          const sel = selectedId === r.id;
+          const hov = hover && hover.id === r.id;
+          // Dim non-hovered tiles slightly so the cursor-target pops without
+          // making everything else illegible.
+          const op = sel ? 0.95 : (hov ? 0.95 : (hover ? 0.55 : 0.82));
+          return (
+            <g key={r.id} style={{ cursor: 'pointer' }} onClick={() => onSelect && onSelect(r.id)}>
+              <rect x={r.x + 1} y={r.y + 1} width={Math.max(0, r.w - 2)} height={Math.max(0, r.h - 2)}
+                fill={r.color} opacity={op}
+                stroke={sel ? 'var(--fg)' : (hov ? 'var(--fg)' : 'transparent')} strokeWidth={sel || hov ? 2 : 0} rx="3" />
+              {big && (
+                <>
+                  <text x={r.x + 10} y={r.y + 20} fontSize="12" fontWeight="600" fill="white" fontFamily="var(--font-mono)">{r.name}</text>
+                  <text x={r.x + 10} y={r.y + 36} fontSize="11" fill="white" opacity="0.85" fontFamily="var(--font-mono)">{fmt(r.value)}</text>
+                  <text x={r.x + 10} y={r.y + 50} fontSize="10" fill="white" opacity="0.7" fontFamily="var(--font-mono)">{pct}%</text>
+                </>
+              )}
+              {!big && r.w > 40 && r.h > 20 && (
+                <text x={r.x + 6} y={r.y + 16} fontSize="10" fontWeight="600" fill="white" fontFamily="var(--font-mono)">{r.name}</text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+      {hover && (() => {
+        const r = rects.find(x => x.id === hover.id);
+        if (!r) return null;
+        const cssX = Math.min((hover.mx + 14) / width * 100, 100 - 30);
+        const cssY = Math.max(2, Math.min((hover.my - 12) / height * 100, 100 - 30));
         const pct = (r.value / total * 100).toFixed(1);
-        const big = r.w > 70 && r.h > 40;
-        const sel = selectedId === r.id;
         return (
-          <g key={r.id} style={{ cursor: 'pointer' }} onClick={() => onSelect && onSelect(r.id)}>
-            <rect x={r.x + 1} y={r.y + 1} width={Math.max(0, r.w - 2)} height={Math.max(0, r.h - 2)}
-              fill={r.color} opacity={sel ? 0.95 : 0.82} stroke={sel ? 'var(--fg)' : 'transparent'} strokeWidth={sel ? 2 : 0} rx="3" />
-            {big && (
-              <>
-                <text x={r.x + 10} y={r.y + 20} fontSize="12" fontWeight="600" fill="white" fontFamily="var(--font-mono)">{r.name}</text>
-                <text x={r.x + 10} y={r.y + 36} fontSize="11" fill="white" opacity="0.85" fontFamily="var(--font-mono)">{fmtUSD(r.value * 1e6, 1)}</text>
-                <text x={r.x + 10} y={r.y + 50} fontSize="10" fill="white" opacity="0.7" fontFamily="var(--font-mono)">{pct}%</text>
-              </>
-            )}
-            {!big && r.w > 40 && r.h > 20 && (
-              <text x={r.x + 6} y={r.y + 16} fontSize="10" fontWeight="600" fill="white" fontFamily="var(--font-mono)">{r.name}</text>
-            )}
-          </g>
+          <div className="chart-tooltip" style={{ left: `${cssX}%`, top: `${cssY}%` }}>
+            <div className="t-date">{r.name}</div>
+            <div className="t-row">
+              <span className="t-label">{valueLabel || 'Value'}</span>
+              <span>{fmt(r.value)}</span>
+            </div>
+            <div className="t-row">
+              <span className="t-label">Share</span>
+              <span>{pct}%</span>
+            </div>
+            <div className="t-row" style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.2)' }}>
+              <span className="t-label">TOTAL</span>
+              <span>{fmt(total)}</span>
+            </div>
+          </div>
         );
-      })}
-    </svg>
+      })()}
+    </div>
   );
 }
 
