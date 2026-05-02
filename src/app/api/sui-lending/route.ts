@@ -13,6 +13,32 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { listProtocols } from '@/protocols/registry';
+import { fetchScallopCanonicalTvl } from '@/lib/prices';
+
+// ─── Per-protocol TVL formula ─────────────────────────────────────────────
+//
+// Each lending protocol on Sui defines TVL its own way on its own UI:
+//   - NAVI displays supply − borrow (verified: $152.36M on app.naviprotocol.io
+//     equals our netLiquidity calc)
+//   - Suilend's headline "Total Deposits" is gross supply (depositedAmountUsd
+//     in their SDK)
+//   - Scallop publishes a single tvl field on their indexer that includes
+//     pools + collaterals; matches their UI and DefiLlama
+//   - AlphaLend: gross supply (totalSuppliedUsd from their SDK)
+//   - Bucket: gross collateral USD across all surfaces (no USDB netting)
+//
+// We respect each protocol's choice rather than imposing a single formula.
+// 'net'    = (supply − borrow) / 1e6
+// 'gross'  = supply / 1e6
+// 'remote' = fetched from the protocol's own canonical endpoint
+type TvlMethod = 'net' | 'gross' | 'remote';
+const PROTOCOL_TVL_METHOD: Record<string, TvlMethod> = {
+  navi:      'net',      // matches app.naviprotocol.io UI
+  suilend:   'gross',    // depositedAmountUsd headline
+  scallop:   'remote',   // fetch indexer.tvl directly
+  alphalend: 'gross',    // totalSuppliedUsd headline
+  bucket:    'gross',    // gross collateral, no USDB netting
+};
 
 export const dynamic = 'force-dynamic';
 
@@ -162,15 +188,23 @@ export async function GET() {
     // Build tvlSeries — frontend expects `[ [{day, value, protocol}, ...], ... ]`
     // ordered by `protocols` array. Missing days fall back to 0.
     //
-    // TVL definition (industry-standard, matches DefiLlama):
-    //   TVL = Σ (quantity of each asset × current market price) deposited in
-    //   the protocol's smart contracts. For lending pools that means supply
-    //   (gross deposits). For CDPs it means collateral locked. Either way
-    //   it is NOT supply − borrow — that's "net liquidity left in the pool"
-    //   and collapses to zero for high-utilization protocols like Scallop.
+    // Per-protocol formula matches what each protocol publishes about itself
+    // (see PROTOCOL_TVL_METHOD top of file): NAVI shows supply−borrow on its
+    // own UI, others show gross. We keep the historical chart in the same
+    // formula as the headline TVL so the right edge of the stacked area
+    // exactly equals the per-protocol KPI number — no "wait, why is the
+    // chart number different" confusion. Scallop's 'remote' method has no
+    // historical series available, so its history uses gross supply (the
+    // closest proxy our PoolDaily aggregator captures).
     const tvlSeries = protocols.map((p) => {
       const arr = aggByProto.get(p.id) ?? Array.from({ length: days }, (_, i) => ({ day: i, supply: 0, borrow: 0, liquidity: 0 }));
-      return arr.map((d) => ({ day: d.day, value: d.supply / 1e6, protocol: p.id }));
+      const method = PROTOCOL_TVL_METHOD[p.id] ?? 'gross';
+      return arr.map((d) => {
+        const value = method === 'net'
+          ? (d.supply - d.borrow) / 1e6
+          : d.supply / 1e6;
+        return { day: d.day, value, protocol: p.id };
+      });
     });
     const tvlMetricSeries = {
       tvl:     tvlSeries,
@@ -300,34 +334,53 @@ export async function GET() {
 
     // ── Protocol metrics (for KPI strip) ────────────────────
     //
-    // TVL = supply (gross deposits, matching DefiLlama's industry-standard
-    // formula: Σ quantity × price). Previously we used `supply − borrow`
-    // which understates TVL for high-utilization pools — Scallop went from
-    // ~$200M (per DefiLlama) to ~$6M because supply≈borrow on its USDC pool.
-    // The correct number is what the protocol's smart contracts hold, gross,
-    // not net of borrows. `netLiquidity` carries the old number for users
-    // who care about that view.
+    // Per-protocol TVL formula (see PROTOCOL_TVL_METHOD at top of file): each
+    // protocol's number matches what its own UI displays, because protocols
+    // don't agree on what "TVL" means. NAVI shows supply−borrow on their
+    // app, Suilend shows gross deposits, Scallop publishes a canonical
+    // indexer field that combines pools + collaterals.
+    //
+    // The route handler fetches Scallop's remote TVL once and threads it
+    // through to the per-protocol mapper below. Runtime cost: one extra
+    // 5-minute-cached HTTP call per request.
+    const scallopRemoteTvlRaw = PROTOCOL_TVL_METHOD.scallop === 'remote'
+      ? await fetchScallopCanonicalTvl()
+      : null;
+
     const protocolMetrics = protocols.map((p) => {
       const protoLatest = latestRows.filter((r) => r.protocol === p.id);
       const supply = protoLatest.reduce((s, r) => s + (r.totalSupplyUsd || 0), 0);
       const borrow = protoLatest.reduce((s, r) => s + (r.totalBorrowsUsd || 0), 0);
-      const tvl = supply / 1e6;                // industry-standard TVL
-      const netLiquidity = (supply - borrow) / 1e6; // available-to-borrow
+      const grossTvl = supply / 1e6;
+      const netLiquidity = (supply - borrow) / 1e6;
+      const method = PROTOCOL_TVL_METHOD[p.id] ?? 'gross';
+      // Apply the protocol's preferred formula. Remote-method protocols fall
+      // back to gross when the remote fetch fails so the dashboard never
+      // shows zero for a protocol just because their indexer is briefly down.
+      let tvl: number;
+      if (method === 'net') {
+        tvl = netLiquidity;
+      } else if (method === 'remote' && p.id === 'scallop' && scallopRemoteTvlRaw != null) {
+        tvl = scallopRemoteTvlRaw / 1e6; // remote returns USD, normalize to $M
+      } else {
+        tvl = grossTvl;
+      }
       const avgBApy = protoLatest.length
         ? protoLatest.reduce((s, r) => s + (r.borrowApy || 0), 0) / protoLatest.length
         : 0;
-      // Coarse revenue: 10% reserve × avg borrow APY × borrow → annual fees ($M).
       const fees = (borrow * (avgBApy / 100) * 0.10) / 1e6;
-      // tvlReference: DefiLlama's number for the same protocol (when we have
-      // a slug mapping). tvlCoverage: our share of that reference. Surfaces
-      // any remaining gap (e.g. Bucket's LP-collateral types we don't yet
-      // unwrap) rather than masking it with a copy-pasted headline number.
+      // tvlReference: DefiLlama's published TVL for the same protocol when
+      // available. tvlCoverage: our number ÷ reference, capped at 1. Lets
+      // the dashboard surface "we account for X% of DefiLlama's number"
+      // when there's still a coverage gap (today: Bucket's LP-tokenized
+      // collateral types we haven't unwrapped).
       const ref = tvlReferenceByProto[p.id];
       const coverage = ref && ref > 0 ? Math.min(1, tvl / ref) : null;
       return {
         id: p.id,
         tvl,
-        netLiquidity,
+        tvlMethod: method,                  // 'net' | 'gross' | 'remote' — for UI badges
+        netLiquidity,                       // legacy / alt-view number
         tvlReference: ref ?? null,
         tvlCoverage: coverage,
         supply: supply / 1e6,

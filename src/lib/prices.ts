@@ -74,6 +74,39 @@ export async function fetchPrice(symbol: string): Promise<number | null> {
 }
 
 /**
+ * Fetch Scallop's authoritative top-level TVL number from their indexer.
+ *
+ * Scallop's market endpoint returns `j.tvl` directly — this is the same
+ * number their UI displays and the same number DefiLlama publishes
+ * ($20.2M as of 2026-05). Our pool-by-pool sum diverges because:
+ *   1. We filter pools below $250K (drops ~$1M of long-tail dust)
+ *   2. Scallop's TVL also includes their separate `collaterals` surface
+ *      (different from `pools`), and the SDK's collateral fields are
+ *      scaled inconsistently across different pool types.
+ *
+ * Rather than try to reproduce Scallop's TVL math from raw pool/collateral
+ * objects, we use the canonical number Scallop themselves publish. This
+ * mirrors the per-protocol "use what each protocol publishes" policy.
+ *
+ * Returns `null` on network failure so callers can fall back to their
+ * computed pool-sum.
+ */
+export async function fetchScallopCanonicalTvl(): Promise<number | null> {
+  try {
+    const indexerUrl = process.env.SCALLOP_INDEXER_URL ?? 'https://sdk.api.scallop.io';
+    const r = await fetch(`${indexerUrl}/api/market`, {
+      next: { revalidate: 300 },
+    });
+    if (!r.ok) return null;
+    const j = await r.json() as { tvl?: number };
+    return typeof j.tvl === 'number' && j.tvl > 0 ? j.tvl : null;
+  } catch (e) {
+    console.warn('[prices.fetchScallopCanonicalTvl]', e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+/**
  * Price Scallop sCoins (interest-bearing receipt tokens issued by Scallop
  * pools). sCoins represent shares in a Scallop pool and don't have direct
  * oracle quotes — DefiLlama's `/coins` API returns nothing for them.
