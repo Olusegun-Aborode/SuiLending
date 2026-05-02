@@ -253,25 +253,27 @@ export async function GET() {
     for (const r of userCountRows) usersByProto[r.protocol] = (usersByProto[r.protocol] || 0) + r.users;
     for (const r of walletPosRows)  usersByProto[r.protocol] = Math.max(usersByProto[r.protocol] || 0, r.users);
 
-    // ── DefiLlama TVL overrides ─────────────────────────────
-    // For protocols whose on-chain coverage falls short of DefiLlama's
-    // headline number (today: Bucket — its LP-tokenized collateral via
-    // Cetus/Kriya/Aftermath isn't unwrapped), we surface the canonical
-    // DefiLlama figure as `tvlDisplayed` so the dashboard shows the right
-    // total while our row-level breakdown explains what we directly index.
+    // ── DefiLlama TVL reference (transparency, NOT override) ───────
+    // We used to override our `tvl` with DefiLlama's headline number for
+    // protocols where on-chain coverage fell short — masking the gap with a
+    // pretty headline that didn't tie out to anything we'd verified. New
+    // policy: dashboard always reports what we actually indexed on-chain.
+    // We still fetch DefiLlama as a *reference* and surface it alongside
+    // ours (`tvlReference` + `tvlCoverage`) so users can see when our
+    // coverage falls short of the publicly-known figure and by how much,
+    // rather than us papering over the gap. Honesty over headline parity.
     const llamaSlugs: Record<string, string> = { bucket: 'bucket-protocol' };
-    const tvlDisplayedByProto: Record<string, number> = {};
+    const tvlReferenceByProto: Record<string, number> = {};
     await Promise.all(
       Object.entries(llamaSlugs).map(async ([proto, slug]) => {
         try {
           const r = await fetch(`https://api.llama.fi/tvl/${slug}`, {
             headers: { 'Accept': 'application/json' },
-            // 5 min cache: daily TVL doesn't move enough to need fresher
             next: { revalidate: 300 },
           });
           if (!r.ok) return;
           const v = Number(await r.text());
-          if (Number.isFinite(v) && v > 0) tvlDisplayedByProto[proto] = v / 1e6; // $M
+          if (Number.isFinite(v) && v > 0) tvlReferenceByProto[proto] = v / 1e6; // $M
         } catch {}
       }),
     );
@@ -288,15 +290,17 @@ export async function GET() {
         ? protoLatest.reduce((s, r) => s + (r.borrowApy || 0), 0) / protoLatest.length
         : 0;
       const fees = (borrow * (avgBApy / 100) * 0.10) / 1e6; // $M
-      // Override headline with DefiLlama's canonical figure when we have an
-      // entry for this protocol. Useful when our adapter only covers a subset
-      // (e.g. Bucket — LP-tokenized collateral isn't unwrapped on our side).
-      const displayedTvl = tvlDisplayedByProto[p.id] ?? calculatedTvl;
+      // tvl is what we VERIFIED on-chain. tvlReference is DefiLlama's number
+      // for the same protocol (when we have a slug mapping). tvlCoverage is
+      // our share of that reference (e.g. 0.31 = we account for 31% of what
+      // DefiLlama sees) — surfaces the gap rather than hiding it.
+      const ref = tvlReferenceByProto[p.id];
+      const coverage = ref && ref > 0 ? Math.min(1, calculatedTvl / ref) : null;
       return {
         id: p.id,
-        tvl: displayedTvl,
-        tvlIndexed: calculatedTvl,
-        tvlSource: tvlDisplayedByProto[p.id] != null ? 'defillama' : 'on-chain',
+        tvl: calculatedTvl,
+        tvlReference: ref ?? null,
+        tvlCoverage: coverage,
         supply: supply / 1e6,
         borrow: borrow / 1e6,
         users: usersByProto[p.id] ?? 0,

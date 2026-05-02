@@ -17,7 +17,7 @@ import {
   BUCKET_SUI_GRPC_URL, BUCKET_V1_PROTOCOL_ID, SUI_GRAPHQL_URL_FOR_BUCKET,
   BUCKET_EVENT_TYPES,
 } from './config';
-import { fetchSuiCoinPrices } from '@/lib/prices';
+import { fetchSuiCoinPrices, fetchScallopSCoinPrices } from '@/lib/prices';
 import { tryFetchLiquidations } from '../_shared/liquidations';
 import { queryEvents, rpc } from '@/lib/rpc';
 
@@ -78,7 +78,18 @@ const bucketAdapter: ProtocolAdapter = {
         ...v1WalkResult.buckets.map((b) => b.coinType),
         ...v1WalkResult.reservoirs.map((r) => r.coinType),
       ];
-      const prices = await fetchSuiCoinPrices(coinTypes);
+      // Fetch DefiLlama prices and Scallop sCoin prices in parallel. DefiLlama
+      // covers canonical assets (SUI/USDC/WETH/...). sCoins are Scallop's
+      // interest-bearing receipt tokens (SCALLOP_USDC, SCALLOP_DEEP, etc.) —
+      // DefiLlama doesn't index them, but the Scallop indexer exposes the
+      // underlying price + conversion rate so we can compute their USD value.
+      // We merge sCoin entries on top so a coinType's price always resolves
+      // through whichever source covers it.
+      const [llamaPrices, scoinPrices] = await Promise.all([
+        fetchSuiCoinPrices(coinTypes),
+        fetchScallopSCoinPrices(),
+      ]);
+      const prices = { ...llamaPrices, ...scoinPrices };
 
       // V2 vault rows (CDP collateral, USDB-issuing)
       const vaultRows = Object.values(vaults).map((v) => toNormalized(v, prices));

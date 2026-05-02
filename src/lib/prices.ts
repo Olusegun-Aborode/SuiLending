@@ -74,6 +74,50 @@ export async function fetchPrice(symbol: string): Promise<number | null> {
 }
 
 /**
+ * Price Scallop sCoins (interest-bearing receipt tokens issued by Scallop
+ * pools). sCoins represent shares in a Scallop pool and don't have direct
+ * oracle quotes — DefiLlama's `/coins` API returns nothing for them.
+ *
+ *   sCoinPrice = underlyingPrice × conversionRate
+ *
+ * `conversionRate` is "underlying coin per 1 sCoin" and grows over time as
+ * pool interest accrues. Both fields come from `ScallopIndexer.getMarket()`,
+ * which is HTTP-cached on Scallop's side.
+ *
+ * Used by the Bucket adapter: many V1 buckets and V2 vaults hold sCoins as
+ * collateral (e.g. SCALLOP_USDC, SCALLOP_DEEP, SCALLOP_WAL) — pricing them
+ * recovers a chunk of TVL that was previously zero in our on-chain math.
+ *
+ * Returns a map of `sCoinType → priceUsd`. sCoins whose underlying we can't
+ * find an oracle price for are simply absent from the returned map.
+ */
+export async function fetchScallopSCoinPrices(): Promise<Record<string, number>> {
+  try {
+    const { ScallopIndexer } = await import('@scallop-io/sui-scallop-sdk');
+    const indexerUrl = process.env.SCALLOP_INDEXER_URL ?? 'https://sdk.api.scallop.io';
+    const indexer = new ScallopIndexer({ indexerApiUrl: indexerUrl });
+    const market = await indexer.getMarket();
+
+    const out: Record<string, number> = {};
+    for (const pool of Object.values(market.pools ?? {})) {
+      // We need: sCoinType (key), underlying price (from pool.coinPrice), and
+      // conversionRate. Some isolated pools may not expose sCoinType — skip
+      // those gracefully rather than throwing.
+      const p = pool as { sCoinType?: string; coinPrice?: number; conversionRate?: number };
+      if (!p.sCoinType || !p.coinPrice || p.coinPrice <= 0) continue;
+      const rate = p.conversionRate && p.conversionRate > 0 ? p.conversionRate : 1;
+      out[p.sCoinType] = p.coinPrice * rate;
+    }
+    return out;
+  } catch (e) {
+    // sCoin pricing is best-effort — if Scallop's indexer is down, the
+    // Bucket adapter just won't price sCoin collateral this cycle.
+    console.warn('[prices.fetchScallopSCoinPrices]', e instanceof Error ? e.message : e);
+    return {};
+  }
+}
+
+/**
  * Fetch USD prices for Sui assets keyed by full coinType. Uses DefiLlama's
  * `sui:<coinType>` price endpoint, which covers anything indexed on the Sui
  * network — including LSTs that aren't on CoinGecko by symbol slug.
