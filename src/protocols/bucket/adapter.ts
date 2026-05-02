@@ -20,6 +20,7 @@ import {
 import { fetchSuiCoinPrices, fetchScallopSCoinPrices } from '@/lib/prices';
 import { tryFetchLiquidations } from '../_shared/liquidations';
 import { queryEvents, rpc } from '@/lib/rpc';
+import { fetchBucketExtraTvl } from './extra-tvl';
 
 // ─── CoinType → canonical symbol ────────────────────────────────────────────
 const CANONICAL_BY_COINTYPE: Record<string, string> = {
@@ -104,13 +105,24 @@ const bucketAdapter: ProtocolAdapter = {
       const v1BucketRows    = v1WalkResult.buckets.map((b) => toV1BucketNormalized(b, prices));
       const v1ReservoirRows = v1WalkResult.reservoirs.map((r) => toV1ReservoirNormalized(r, prices));
 
-      const all = [...vaultRows, ...psmRows, ...savingRows, ...v1BucketRows, ...v1ReservoirRows];
+      // Extra-TVL surfaces that the SDK doesn't enumerate (Fountain savings,
+      // Aftermath/Kriya BUCK pools, AF AFSUI/SUI CDP, the LP-tokenized PSMs).
+      // Direct mirror of DefiLlama's bucket-protocol/index.js — see
+      // src/protocols/bucket/extra-tvl.ts for the per-surface walk and the
+      // exact object IDs we're reading.
+      const extraRows = await fetchBucketExtraTvl(prices).catch((e) => {
+        console.warn('[bucket.fetchPools] extra-tvl walk failed:', e instanceof Error ? e.message : e);
+        return [] as NormalizedPool[];
+      });
+
+      const all = [...vaultRows, ...psmRows, ...savingRows, ...v1BucketRows, ...v1ReservoirRows, ...extraRows];
 
       // Filter dust — canonical coinTypes always pass; named-prefix product
-      // surfaces (PSM/SAVING/V1/V1PSM) always pass.
+      // surfaces (PSM/SAVING/V1/V1PSM/BKT-extra) always pass so the
+      // dashboard sees every surface even when individual rows are tiny.
       return all.filter((p) => {
         if (CANONICAL_BY_COINTYPE[p.coinType ?? '']) return true;
-        if (/^(PSM|SAVING|V1|V1PSM)-/.test(p.symbol)) return true;
+        if (/^(PSM|SAVING|V1|V1PSM|BKT-)/.test(p.symbol)) return true;
         return p.totalSupplyUsd >= BUCKET_MIN_TVL_USD;
       });
     } catch (error) {
