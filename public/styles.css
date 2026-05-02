@@ -402,6 +402,61 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   box-shadow: 0 1px 2px rgba(0,0,0,0.06);
 }
 
+/* Info ⓘ icon for chart-header tooltips.
+   Pure-CSS hover (and :focus-within for keyboard users) reveals the tip,
+   so we don't need React state for what's effectively decorative help text.
+   The tip is absolutely positioned beneath the icon and wraps long copy at
+   a max-width so descriptions can be a real sentence, not just a label. */
+.info-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px;
+  margin-left: 8px;
+  position: relative;
+  color: var(--fg-muted);
+  cursor: help;
+  border-radius: 50%;
+  outline: none;
+  vertical-align: middle;
+  transition: color 0.12s;
+}
+.info-icon:hover, .info-icon:focus-within { color: var(--orange); }
+.info-icon svg { display: block; }
+.info-tip {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  /* Right-anchor when the icon sits in a narrow column near the right edge.
+     The clamp keeps the tip readable across wide and narrow panels. */
+  width: max-content;
+  max-width: min(320px, 70vw);
+  background: var(--fg); color: var(--bg);
+  padding: 8px 10px; border-radius: 5px;
+  font-family: var(--font-sans, system-ui, sans-serif);
+  font-size: 11px; font-weight: 400;
+  line-height: 1.4;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: normal;
+  text-align: left;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.18);
+  z-index: 40;
+  pointer-events: none;
+}
+/* Caret pointing up to the icon. Built from rotated square so it inherits
+   the tip's background color in both light and dark themes. */
+.info-tip::before {
+  content: '';
+  position: absolute;
+  top: -4px; left: 50%;
+  width: 8px; height: 8px;
+  background: var(--fg);
+  transform: translateX(-50%) rotate(45deg);
+}
+.info-icon:hover .info-tip,
+.info-icon:focus-within .info-tip { display: block; }
+
 /* Sidebar */
 .sidebar {
   background: var(--surface-2);

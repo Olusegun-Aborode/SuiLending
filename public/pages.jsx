@@ -150,9 +150,12 @@ function ProtocolChip({ id }) {
 //   defaultTimeframe: which entry of `timeframes` to start on. Defaults to
 //                   the LAST one (i.e. the longest window) so the chart
 //                   shows the most context out of the box.
-//   caption:        optional one-line description rendered under the title.
-//                   Useful for charts whose meaning isn't obvious from the
-//                   title alone (e.g. treemaps, custom composites).
+//   caption:        optional one-line description rendered inline next to
+//                   the title (always visible — good for very short labels).
+//   description:    optional richer explanation surfaced via a hover ⓘ icon.
+//                   Use this for "what does this chart do" copy where the
+//                   title alone is ambiguous (treemaps, composite metrics).
+//                   Pure CSS hover, no state — keeps the panel header light.
 //   className:      'col-4' | 'col-6' | 'col-8' | etc — for grid layout
 //   render({ proto, metric, size, timeframe }):  size is 'normal'|'expanded'
 // ────────────────────────────────────────────────────────────────
@@ -165,6 +168,7 @@ function ChartPanel({
   timeframes,
   defaultTimeframe,
   caption,
+  description,
   className = '',
   render,
 }) {
@@ -195,6 +199,16 @@ function ChartPanel({
         <div className="panel-header">
           <span className="panel-title">
             <span className="bullet">●</span> {resolvedTitle}
+            {description && (
+              <span className="info-icon" tabIndex={0} aria-label={description}>
+                <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <circle cx="8" cy="8" r="6.5" />
+                  <line x1="8" y1="7" x2="8" y2="11.5" />
+                  <circle cx="8" cy="4.8" r="0.4" fill="currentColor" />
+                </svg>
+                <span className="info-tip" role="tooltip">{description}</span>
+              </span>
+            )}
             {caption && <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 400, color: 'var(--fg-muted)', textTransform: 'none', letterSpacing: 0 }}>{caption}</span>}
           </span>
           <div className="chart-tools" data-snapshot-skip="true">
@@ -279,6 +293,7 @@ function PageOverview() {
           title="TVL by Protocol"
           className="col-8"
           protocolMode="multi"
+          description="Stacked time series of total value locked across the selected protocols. Switch the Data dropdown to see Supplied, Borrowed, or Revenue instead. Use the timeframe toggle to zoom between 7, 30, and 90 days."
           metricItems={[
             { id: 'tvl',     label: 'TVL' },
             { id: 'supply',  label: 'Supplied' },
@@ -306,7 +321,7 @@ function PageOverview() {
           title="Protocol Mix"
           className="col-4"
           protocolMode="none"
-          caption="— share of each protocol in today's totals"
+          description="Treemap of each protocol's share of today's total. Tile area is proportional to the protocol's value for the chosen metric — switch between TVL, Supplied, and Borrowed to see how the mix shifts. Hover any tile for exact value and percentage share."
           metricItems={[
             { id: 'tvl',    label: 'By TVL' },
             { id: 'supply', label: 'By Supplied' },
@@ -329,6 +344,7 @@ function PageOverview() {
         <ChartPanel
           title="Daily Flows"
           protocolMode="none"
+          description="Daily $-volume of supply deposits, borrow draws, and liquidation repayments aggregated across all 5 protocols. Stacked bars show the mix on each day; the tooltip's TOTAL line tells you total daily activity. Filter to a single flow type via the Data dropdown."
           metricItems={[
             { id: 'all',     label: 'All flows' },
             { id: 'supply',  label: 'Supply only' },
