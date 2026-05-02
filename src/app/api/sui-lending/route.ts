@@ -98,6 +98,18 @@ export async function GET() {
 
     // ── Latest snapshot per (protocol, symbol) ──────────────
     // Using a CTE since Prisma's groupBy doesn't support DISTINCT ON.
+    //
+    // Critical freshness filter: only consider snapshots from the last 24h.
+    // Without this, dead pools — symbols a protocol used to index but doesn't
+    // anymore (e.g. NAVI renamed USDT→suiUSDT, XBTC→xBTC) — keep their old
+    // last-recorded snapshot at the top of their (protocol, symbol) bucket
+    // forever. If that old snapshot was written under a buggy scaling pass,
+    // the dead row inflates protocol TVL by orders of magnitude. The crons
+    // tick at most every hour for the slowest protocol, so 24h is loose
+    // enough for a reasonable downtime margin and tight enough to drop
+    // anything older than a single missed refresh cycle.
+    const SNAPSHOT_FRESHNESS_HOURS = 24;
+    const freshSince = new Date(Date.now() - SNAPSHOT_FRESHNESS_HOURS * 3600 * 1000);
     const latestRows = (await db.$queryRawUnsafe(`
       SELECT DISTINCT ON (protocol, symbol)
         protocol, symbol, timestamp,
@@ -107,8 +119,9 @@ export async function GET() {
         "supplyApy"::float8, "borrowApy"::float8,
         utilization::float8, price::float8
       FROM "PoolSnapshot"
+      WHERE timestamp >= $1
       ORDER BY protocol, symbol, timestamp DESC
-    `)) as SnapshotRow[];
+    `, freshSince)) as SnapshotRow[];
 
     // Pools (for pool-archetype protocols)
     const pools = latestRows
