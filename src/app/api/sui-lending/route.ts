@@ -148,9 +148,16 @@ export async function GET() {
 
     // Build tvlSeries — frontend expects `[ [{day, value, protocol}, ...], ... ]`
     // ordered by `protocols` array. Missing days fall back to 0.
+    //
+    // TVL definition (industry-standard, matches DefiLlama):
+    //   TVL = Σ (quantity of each asset × current market price) deposited in
+    //   the protocol's smart contracts. For lending pools that means supply
+    //   (gross deposits). For CDPs it means collateral locked. Either way
+    //   it is NOT supply − borrow — that's "net liquidity left in the pool"
+    //   and collapses to zero for high-utilization protocols like Scallop.
     const tvlSeries = protocols.map((p) => {
       const arr = aggByProto.get(p.id) ?? Array.from({ length: days }, (_, i) => ({ day: i, supply: 0, borrow: 0, liquidity: 0 }));
-      return arr.map((d) => ({ day: d.day, value: (d.supply - d.borrow) / 1e6, protocol: p.id }));
+      return arr.map((d) => ({ day: d.day, value: d.supply / 1e6, protocol: p.id }));
     });
     const tvlMetricSeries = {
       tvl:     tvlSeries,
@@ -279,26 +286,35 @@ export async function GET() {
     );
 
     // ── Protocol metrics (for KPI strip) ────────────────────
+    //
+    // TVL = supply (gross deposits, matching DefiLlama's industry-standard
+    // formula: Σ quantity × price). Previously we used `supply − borrow`
+    // which understates TVL for high-utilization pools — Scallop went from
+    // ~$200M (per DefiLlama) to ~$6M because supply≈borrow on its USDC pool.
+    // The correct number is what the protocol's smart contracts hold, gross,
+    // not net of borrows. `netLiquidity` carries the old number for users
+    // who care about that view.
     const protocolMetrics = protocols.map((p) => {
       const protoLatest = latestRows.filter((r) => r.protocol === p.id);
       const supply = protoLatest.reduce((s, r) => s + (r.totalSupplyUsd || 0), 0);
       const borrow = protoLatest.reduce((s, r) => s + (r.totalBorrowsUsd || 0), 0);
-      const calculatedTvl = (supply - borrow) / 1e6;
-      // Coarse revenue estimate: 10% reserve × avg borrow APY × borrow / 365 → daily revenue
-      // Annual: borrow × avg-bAPY × 0.10
+      const tvl = supply / 1e6;                // industry-standard TVL
+      const netLiquidity = (supply - borrow) / 1e6; // available-to-borrow
       const avgBApy = protoLatest.length
         ? protoLatest.reduce((s, r) => s + (r.borrowApy || 0), 0) / protoLatest.length
         : 0;
-      const fees = (borrow * (avgBApy / 100) * 0.10) / 1e6; // $M
-      // tvl is what we VERIFIED on-chain. tvlReference is DefiLlama's number
-      // for the same protocol (when we have a slug mapping). tvlCoverage is
-      // our share of that reference (e.g. 0.31 = we account for 31% of what
-      // DefiLlama sees) — surfaces the gap rather than hiding it.
+      // Coarse revenue: 10% reserve × avg borrow APY × borrow → annual fees ($M).
+      const fees = (borrow * (avgBApy / 100) * 0.10) / 1e6;
+      // tvlReference: DefiLlama's number for the same protocol (when we have
+      // a slug mapping). tvlCoverage: our share of that reference. Surfaces
+      // any remaining gap (e.g. Bucket's LP-collateral types we don't yet
+      // unwrap) rather than masking it with a copy-pasted headline number.
       const ref = tvlReferenceByProto[p.id];
-      const coverage = ref && ref > 0 ? Math.min(1, calculatedTvl / ref) : null;
+      const coverage = ref && ref > 0 ? Math.min(1, tvl / ref) : null;
       return {
         id: p.id,
-        tvl: calculatedTvl,
+        tvl,
+        netLiquidity,
         tvlReference: ref ?? null,
         tvlCoverage: coverage,
         supply: supply / 1e6,
@@ -345,7 +361,9 @@ export async function GET() {
       return s;
     };
     const kpiSparks = {
-      tvl:     Array.from({ length: 30 }, (_, i) => sumDay(days - 30 + i, 'liquidity')),
+      // tvl sparkline traces gross deposits (matches the headline TVL number)
+      // — same source as `supply` since they're the same metric for lending.
+      tvl:     Array.from({ length: 30 }, (_, i) => sumDay(days - 30 + i, 'supply')),
       supply:  Array.from({ length: 30 }, (_, i) => sumDay(days - 30 + i, 'supply')),
       borrow:  Array.from({ length: 30 }, (_, i) => sumDay(days - 30 + i, 'borrow')),
       revenue: Array.from({ length: 30 }, (_, i) => sumDay(days - 30 + i, 'borrow') * 0.10 / 365),
