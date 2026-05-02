@@ -304,6 +304,36 @@ export async function GET() {
       };
     });
 
+    // ── Reconcile time series with live snapshot ────────────
+    // Two paths produced different totals before this:
+    //   • Protocol Mix uses `protocolMetrics.tvl` (PoolSnapshot, DefiLlama-overridden)
+    //   • TVL by Protocol used `tvlMetricSeries.tvl` (PoolDaily, no override)
+    // PoolDaily lags the live snapshot (cron runs once a day) and doesn't
+    // get the DefiLlama override, so today's column in the area chart can
+    // sum to half the treemap total. Fix: stamp the LATEST day of each
+    // per-protocol series with the value from `protocolMetrics`. Earlier
+    // days still come from PoolDaily history (so trends are honest); only
+    // the right edge gets reconciled. Daily revenue uses fees÷365 to match
+    // the protocolMetrics annualized estimate.
+    //
+    // Note: `tvlSeries` is the same array reference as `tvlMetricSeries.tvl`
+    // (see assignment above), so mutating tvlMetricSeries.tvl updates both.
+    for (let i = 0; i < protocols.length; i++) {
+      const m = protocolMetrics[i];
+      const tvlArr     = tvlMetricSeries.tvl[i];
+      const supplyArr  = tvlMetricSeries.supply[i];
+      const borrowArr  = tvlMetricSeries.borrow[i];
+      const revenueArr = tvlMetricSeries.revenue[i];
+      const last = (arr: { day: number; value: number; protocol: string }[], v: number) => {
+        if (!arr.length) return;
+        arr[arr.length - 1] = { ...arr[arr.length - 1], value: v };
+      };
+      last(tvlArr,     m.tvl);
+      last(supplyArr,  m.supply);
+      last(borrowArr,  m.borrow);
+      last(revenueArr, m.fees / 365);
+    }
+
     // ── KPI sparklines (last 30 days, aggregate across protocols) ──
     const sumDay = (i: number, key: 'supply' | 'borrow' | 'liquidity') => {
       let s = 0;
