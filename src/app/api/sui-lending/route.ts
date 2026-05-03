@@ -17,27 +17,29 @@ import { fetchScallopCanonicalTvl } from '@/lib/prices';
 
 // ─── Per-protocol TVL formula ─────────────────────────────────────────────
 //
-// Each lending protocol on Sui defines TVL its own way on its own UI:
-//   - NAVI displays supply − borrow (verified: $152.36M on app.naviprotocol.io
-//     equals our netLiquidity calc)
-//   - Suilend's headline "Total Deposits" is gross supply (depositedAmountUsd
-//     in their SDK)
-//   - Scallop publishes a single tvl field on their indexer that includes
-//     pools + collaterals; matches their UI and DefiLlama
-//   - AlphaLend: gross supply (totalSuppliedUsd from their SDK)
-//   - Bucket: gross collateral USD across all surfaces (no USDB netting)
+// Each lending protocol on Sui defines TVL its own way on its own UI.
+// User-verified ground-truth from each protocol's own dashboard:
+//   - NAVI:      $152.36M = supply − borrow
+//   - Suilend:   "TVL: $136M" = deposits ($188M) − borrows ($52.4M)
+//   - Scallop:   $20.20M from their indexer's canonical tvl field
+//   - AlphaLend: "Available Liquidity: $72.7M" = supply ($131M) − borrow ($58.7M)
+//   - Bucket:    $51.57M reported on app.bucketprotocol.io (gross collateral)
 //
-// We respect each protocol's choice rather than imposing a single formula.
+// Pattern: every pool-based lending protocol uses (supply − borrow) for the
+// number they label "TVL" / "Available Liquidity". CDP protocols (Bucket)
+// use gross collateral. Scallop is the only one that publishes a single
+// canonical number we fetch directly.
+//
 // 'net'    = (supply − borrow) / 1e6
 // 'gross'  = supply / 1e6
 // 'remote' = fetched from the protocol's own canonical endpoint
 type TvlMethod = 'net' | 'gross' | 'remote';
 const PROTOCOL_TVL_METHOD: Record<string, TvlMethod> = {
-  navi:      'net',      // matches app.naviprotocol.io UI
-  suilend:   'gross',    // depositedAmountUsd headline
-  scallop:   'remote',   // fetch indexer.tvl directly
-  alphalend: 'gross',    // totalSuppliedUsd headline
-  bucket:    'gross',    // gross collateral, no USDB netting
+  navi:      'net',      // app.naviprotocol.io  → $152.36M
+  suilend:   'net',      // suilend.fi          → "TVL: $136M"
+  scallop:   'remote',   // sdk.api.scallop.io   → $20.20M (indexer.tvl)
+  alphalend: 'net',      // alphalend.xyz       → "Available Liquidity: $72.7M"
+  bucket:    'gross',    // app.bucketprotocol.io → $51.57M (gross collateral, coverage gap)
 };
 
 export const dynamic = 'force-dynamic';
