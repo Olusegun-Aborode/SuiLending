@@ -74,6 +74,34 @@ export async function fetchPrice(symbol: string): Promise<number | null> {
 }
 
 /**
+ * Fetch Bucket's canonical TVL from DefiLlama. Bucket's SDK doesn't expose
+ * an aggregate TVL field (no `getProtocolStats`, no `tvl` getter on
+ * BucketClient — verified against v2.1.4). Their UI computes TVL
+ * client-side by pricing every LP-tokenized collateral type using external
+ * DEX SDKs (Cetus / Bluefin / Aftermath), which our adapter doesn't
+ * mirror yet. As a stop-gap until we ship LP unwrappers, we use
+ * DefiLlama's `bucket-protocol` slug as the canonical headline.
+ *
+ * This is a third-party number — different from Scallop's `remote`
+ * method, which queries Scallop's own indexer. DefiLlama and Bucket's
+ * own UI may diverge slightly because each computes via slightly
+ * different price sources for LP collateral. Returns null on failure.
+ */
+export async function fetchBucketCanonicalTvl(): Promise<number | null> {
+  try {
+    const r = await fetch('https://api.llama.fi/tvl/bucket-protocol', {
+      next: { revalidate: 300 },
+    });
+    if (!r.ok) return null;
+    const v = Number(await r.text());
+    return Number.isFinite(v) && v > 0 ? v : null;
+  } catch (e) {
+    console.warn('[prices.fetchBucketCanonicalTvl]', e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+/**
  * Fetch Scallop's authoritative top-level TVL number from their indexer.
  *
  * Scallop's market endpoint returns `j.tvl` directly — this is the same

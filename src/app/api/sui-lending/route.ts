@@ -13,7 +13,7 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { listProtocols } from '@/protocols/registry';
-import { fetchScallopCanonicalTvl } from '@/lib/prices';
+import { fetchScallopCanonicalTvl, fetchBucketCanonicalTvl } from '@/lib/prices';
 
 // ─── Per-protocol TVL formula ─────────────────────────────────────────────
 //
@@ -39,7 +39,8 @@ const PROTOCOL_TVL_METHOD: Record<string, TvlMethod> = {
   suilend:   'net',      // suilend.fi          → "TVL: $136M"
   scallop:   'remote',   // sdk.api.scallop.io   → $20.20M (indexer.tvl)
   alphalend: 'net',      // alphalend.xyz       → "Available Liquidity: $72.7M"
-  bucket:    'gross',    // app.bucketprotocol.io → $51.57M (gross collateral, coverage gap)
+  bucket:    'remote',   // DefiLlama bucket-protocol → ~$62M (close to UI's $51.57M;
+                         // proper match needs LP unwrappers we haven't built)
 };
 
 export const dynamic = 'force-dynamic';
@@ -345,9 +346,13 @@ export async function GET() {
     // The route handler fetches Scallop's remote TVL once and threads it
     // through to the per-protocol mapper below. Runtime cost: one extra
     // 5-minute-cached HTTP call per request.
-    const scallopRemoteTvlRaw = PROTOCOL_TVL_METHOD.scallop === 'remote'
-      ? await fetchScallopCanonicalTvl()
-      : null;
+    // Fetch all 'remote' protocol TVLs in parallel up-front so the per-protocol
+    // mapper below stays synchronous. Each fetch is HTTP-cached for 5 minutes
+    // so the cost is roughly one network round-trip per cache cycle.
+    const [scallopRemoteTvlRaw, bucketRemoteTvlRaw] = await Promise.all([
+      PROTOCOL_TVL_METHOD.scallop === 'remote' ? fetchScallopCanonicalTvl() : Promise.resolve(null),
+      PROTOCOL_TVL_METHOD.bucket  === 'remote' ? fetchBucketCanonicalTvl()  : Promise.resolve(null),
+    ]);
 
     const protocolMetrics = protocols.map((p) => {
       const protoLatest = latestRows.filter((r) => r.protocol === p.id);
@@ -364,6 +369,8 @@ export async function GET() {
         tvl = netLiquidity;
       } else if (method === 'remote' && p.id === 'scallop' && scallopRemoteTvlRaw != null) {
         tvl = scallopRemoteTvlRaw / 1e6; // remote returns USD, normalize to $M
+      } else if (method === 'remote' && p.id === 'bucket' && bucketRemoteTvlRaw != null) {
+        tvl = bucketRemoteTvlRaw / 1e6;
       } else {
         tvl = grossTvl;
       }
