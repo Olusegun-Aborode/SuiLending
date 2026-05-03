@@ -128,17 +128,21 @@ export async function GET() {
     // ── Latest snapshot per (protocol, symbol) ──────────────
     // Using a CTE since Prisma's groupBy doesn't support DISTINCT ON.
     //
-    // Critical freshness filter: only consider snapshots from the last 24h.
-    // Without this, dead pools — symbols a protocol used to index but doesn't
-    // anymore (e.g. NAVI renamed USDT→suiUSDT, XBTC→xBTC) — keep their old
-    // last-recorded snapshot at the top of their (protocol, symbol) bucket
-    // forever. If that old snapshot was written under a buggy scaling pass,
-    // the dead row inflates protocol TVL by orders of magnitude. The crons
-    // tick at most every hour for the slowest protocol, so 24h is loose
-    // enough for a reasonable downtime margin and tight enough to drop
-    // anything older than a single missed refresh cycle.
-    const SNAPSHOT_FRESHNESS_HOURS = 24;
-    const freshSince = new Date(Date.now() - SNAPSHOT_FRESHNESS_HOURS * 3600 * 1000);
+    // Freshness filter: drop snapshots older than the freshness window so
+    // dead-symbol ghosts (e.g. NAVI renamed USDT→suiUSDT some time back, but
+    // an old buggy-scale USDT snapshot was still inflating TVL because nothing
+    // newer existed in that bucket) get excluded.
+    //
+    // Window choice: protocols cron at very different cadences. NAVI/Suilend
+    // refresh every 30min via collect-pools; Bucket runs once daily at 00:40
+    // UTC. A 24h window is too tight — one delayed daily cron means an
+    // entire protocol disappears from the dashboard, which is what just
+    // happened to Bucket. 7 days is loose enough to absorb a few missed
+    // daily runs while still being short enough that any stale renamed-pool
+    // ghost (the ones that caused the original $1B USDT bug) is months old
+    // and trivially excluded.
+    const SNAPSHOT_FRESHNESS_DAYS = 7;
+    const freshSince = new Date(Date.now() - SNAPSHOT_FRESHNESS_DAYS * 86400 * 1000);
     const latestRows = (await db.$queryRawUnsafe(`
       SELECT DISTINCT ON (protocol, symbol)
         protocol, symbol, timestamp,
