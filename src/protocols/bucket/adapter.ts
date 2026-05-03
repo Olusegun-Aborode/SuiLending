@@ -90,7 +90,17 @@ const bucketAdapter: ProtocolAdapter = {
         fetchSuiCoinPrices(coinTypes),
         fetchScallopSCoinPrices(),
       ]);
-      const prices = { ...llamaPrices, ...scoinPrices };
+      // LP-collateral unit prices for V1 CDP types (BUCKETUS, BLUEFIN_STABLE_LP,
+      // CETABLE, STAPEARL). These don't have oracle prices but Bucket's UI
+      // values them with hardcoded 50/50 splits. Without this layer, V1 CDPs
+      // holding $1.94M BUCKETUS / 282K BLUEFIN_STABLE_LP / etc. price at zero
+      // and the protocol TVL is materially understated. See computeLpUnitPrices
+      // for the formulas (mirrors DefiLlama's bucket-protocol adapter exactly).
+      const lpUnitPrices = computeLpUnitPrices(
+        v1WalkResult.buckets.map((b) => ({ coinType: b.coinType, decimals: b.decimals })),
+        llamaPrices,
+      );
+      const prices = { ...llamaPrices, ...scoinPrices, ...lpUnitPrices };
 
       // V2 vault rows (CDP collateral, USDB-issuing)
       const vaultRows = Object.values(vaults).map((v) => toNormalized(v, prices));
@@ -650,6 +660,64 @@ function toV1BucketNormalized(b: V1BucketRaw, prices: Record<string, number>): N
 }
 
 const BUCK_DECIMALS = 9;
+
+// ─── LP-collateral unit pricing (option A from Bucket TVL gap analysis) ─────
+//
+// Bucket V1 CDPs accept a long tail of LP-tokenized collateral types that
+// don't have oracle prices: BUCKETUS (Cetus BUCK/USDC LP), BLUEFIN_STABLE_LP
+// (Bluefin BUCK/USDC LP), CETABLE / STAPEARL (Curve-style stable LPs).
+// Bucket's UI prices these client-side using hardcoded 50/50 split formulas
+// matching what DefiLlama's bucket-protocol adapter does (see
+// projects/bucket-protocol/index.js, lines ~309-333 for the canonical
+// formulas this mirrors). Without this layer those collateral types price at
+// zero in our V1 walk and the protocol TVL is understated by ~$1-2M.
+//
+// Formula:
+//   BUCKETUS / BLUEFIN_STABLE_LP: 1 LP raw → 1/(2×1000) USDC raw
+//     (the /1000 absorbs the BUCK→USDC decimals delta, since 50% is BUCK
+//     and we skip BUCK to avoid double-counting Bucket's own stablecoin)
+//   CETABLE / STAPEARL: 1 LP raw → 0.5 USDC raw + 0.5 USDT raw
+//
+// Returns Record<coinType, unitPriceUsdPerHumanUnit>. Caller merges this
+// into the prices map so toV1BucketNormalized's existing price * collat
+// math Just Works for these collateral types.
+const USDC_TYPE_FOR_LP = '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC';
+const USDT_TYPE_FOR_LP = '0x375f70cf2ae4c00bf37117d0c85a2c71545e6ee05c4a5c7d282cd66a4504b068::usdt::USDT';
+
+function computeLpUnitPrices(
+  collats: Array<{ coinType: string; decimals: number }>,
+  prices: Record<string, number>,
+): Record<string, number> {
+  const usdcPrice = prices[USDC_TYPE_FOR_LP] ?? 1;
+  const usdtPrice = prices[USDT_TYPE_FOR_LP] ?? 1;
+  const out: Record<string, number> = {};
+
+  // De-dup by coinType; we only need one unit price per LP coin even if
+  // multiple V1 CDPs hold it.
+  const seen = new Set<string>();
+  for (const c of collats) {
+    if (seen.has(c.coinType)) continue;
+    seen.add(c.coinType);
+    const ct = c.coinType;
+    const dec = c.decimals;
+
+    // BUCKETUS / BLUEFIN_STABLE_LP: half-USDC formula with /1000 BUCK-decimal
+    // correction. Unit price (per LP human unit) = 10^dec / (2*1000*1e6) × USDC.
+    if (ct.includes('::bucketus::') || ct.includes('::bluefin_stable_lp::')) {
+      out[ct] = Math.pow(10, dec) / (2 * 1000 * 1e6) * usdcPrice;
+      continue;
+    }
+
+    // CETABLE / STAPEARL: 50/50 USDC + USDT, both 6-decimal stables.
+    // Unit price = 10^dec / (2 * 1e6) × USDC_price + same × USDT_price.
+    if (ct.includes('::cetable::') || ct.includes('::stapearl::')) {
+      const half = Math.pow(10, dec) / 2 / 1e6;
+      out[ct] = half * usdcPrice + half * usdtPrice;
+      continue;
+    }
+  }
+  return out;
+}
 
 /**
  * V1 Reservoir (PSM swap pool) row normalizer.
