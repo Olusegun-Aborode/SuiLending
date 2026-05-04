@@ -24,6 +24,14 @@ model PoolSnapshot {
   utilization           Float
   price                 Float
 
+  // Risk parameters per pool. Can change (governance updates), so we
+  // capture per-snapshot. `ltv` = max LTV / collateral factor (e.g. 0.75
+  // means you can borrow up to 75% of supplied value). `liquidationThreshold`
+  // = the LTV above which a position becomes liquidatable. Both decimals 0-1.
+  // Default 0 so existing rows don't break the migration.
+  ltv                   Float    @default(0)
+  liquidationThreshold  Float    @default(0)
+
   @@index([protocol, symbol, timestamp])
   @@index([protocol, timestamp])
 }

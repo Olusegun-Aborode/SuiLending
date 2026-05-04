@@ -53,6 +53,12 @@ export async function GET(
       borrowApy: num(pool.borrowApy),
       utilization: num(pool.utilization),
       price: num(pool.price),
+      // Risk parameters. Adapters fetch these (NormalizedPool has them) but
+      // we used to drop them on the floor — Prisma columns added 2026-05-04.
+      // Bucket vaults set ltv = 1 / minCollateralRatio so this still works
+      // for the CDP archetype.
+      ltv: num(pool.ltv),
+      liquidationThreshold: num(pool.liquidationThreshold),
     }));
 
     await db.poolSnapshot.createMany({ data: snapshots });

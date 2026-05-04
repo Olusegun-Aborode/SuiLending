@@ -1151,9 +1151,23 @@ function PageMarketDetail() {
           <div className="panel col-4">
             <div className="panel-header"><span className="panel-title"><span className="bullet">●</span> Risk Parameters</span></div>
             <div className="panel-body">
-              <ParamRow k="LTV (Coll. Factor)" v={`${market.ltv}%`} />
-              <ParamRow k="Liquidation Thresh." v={`${market.liqThreshold}%`} />
-              <ParamRow k="Reserve Factor"  v={`${market.reserveFactor}%`} />
+              <ParamRow k="LTV (Coll. Factor)" v={`${(market.ltv ?? 0).toFixed(1)}%`} />
+              <ParamRow k="Liquidation Thresh." v={`${(market.liqThreshold ?? 0).toFixed(1)}%`} />
+              <ParamRow k="Reserve Factor"  v={`${(market.reserveFactor ?? 0).toFixed(1)}%`} />
+              {/* Aggregate market Health Factor — see backend toPoolRow for
+                  the formula. null = no borrows yet (HF is undefined / ∞);
+                  show "—" rather than misleading the user with a huge number.
+                  Color-code <1 (liquidatable) red, 1-1.5 amber, ≥1.5 green. */}
+              <ParamRow
+                k="Health Factor"
+                v={market.healthFactor == null
+                  ? '—'
+                  : market.healthFactor.toFixed(2)}
+                c={market.healthFactor == null ? 'var(--fg-muted)'
+                    : market.healthFactor < 1   ? 'var(--red)'
+                    : market.healthFactor < 1.5 ? 'var(--orange)'
+                    : 'var(--green)'}
+              />
               <ParamRow k="Supply Cap" v={`${fmtNum(market.supplyCap, 0)} ${marketSym}`} />
               <ParamRow k="Borrow Cap" v={`${fmtNum(market.borrowCap, 0)} ${marketSym}`} />
               <ParamRow k="Supply Cap Used"  v={`${supplyCapPct.toFixed(1)}%`} c={supplyCapPct > 80 ? 'var(--red)' : 'var(--fg)'} />

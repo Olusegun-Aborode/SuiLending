@@ -66,6 +66,16 @@ interface SnapshotRow {
   totalBorrows: number;
   totalBorrowsUsd: number;
   availableLiquidityUsd: number;
+  // Risk params from PoolSnapshot (added 2026-05-04). Decimals 0-1.
+  ltv: number;
+  liquidationThreshold: number;
+  // IRM params from RateModelParams (LEFT-joined on protocol+symbol). May
+  // be null when the adapter didn't populate IRM for this pool.
+  irmBaseRate: number | null;
+  irmMultiplier: number | null;
+  irmJumpMult: number | null;
+  irmKink: number | null;
+  irmReserveFactor: number | null;
   supplyApy: number;
   borrowApy: number;
   utilization: number;
@@ -143,17 +153,31 @@ export async function GET() {
     // and trivially excluded.
     const SNAPSHOT_FRESHNESS_DAYS = 7;
     const freshSince = new Date(Date.now() - SNAPSHOT_FRESHNESS_DAYS * 86400 * 1000);
+    // LEFT JOIN RateModelParams so the latest snapshot row carries both pool
+    // state and the rate-model parameters in a single query. RateModelParams
+    // is keyed by (protocol, symbol) and updated by the same collect-pools
+    // cron — so the IRM here matches the pool's current state. Pools without
+    // an IRM entry (e.g. adapters that haven't populated `irm` yet) get NULL,
+    // which the toPoolRow helper coerces to 0.
     const latestRows = (await db.$queryRawUnsafe(`
-      SELECT DISTINCT ON (protocol, symbol)
-        protocol, symbol, timestamp,
-        "totalSupply"::float8, "totalSupplyUsd"::float8,
-        "totalBorrows"::float8, "totalBorrowsUsd"::float8,
-        "availableLiquidityUsd"::float8,
-        "supplyApy"::float8, "borrowApy"::float8,
-        utilization::float8, price::float8
-      FROM "PoolSnapshot"
-      WHERE timestamp >= $1
-      ORDER BY protocol, symbol, timestamp DESC
+      SELECT DISTINCT ON (ps.protocol, ps.symbol)
+        ps.protocol, ps.symbol, ps.timestamp,
+        ps."totalSupply"::float8, ps."totalSupplyUsd"::float8,
+        ps."totalBorrows"::float8, ps."totalBorrowsUsd"::float8,
+        ps."availableLiquidityUsd"::float8,
+        ps."supplyApy"::float8, ps."borrowApy"::float8,
+        ps.utilization::float8, ps.price::float8,
+        ps.ltv::float8, ps."liquidationThreshold"::float8,
+        rmp."baseRate"::float8       AS "irmBaseRate",
+        rmp.multiplier::float8       AS "irmMultiplier",
+        rmp."jumpMultiplier"::float8 AS "irmJumpMult",
+        rmp.kink::float8             AS "irmKink",
+        rmp."reserveFactor"::float8  AS "irmReserveFactor"
+      FROM "PoolSnapshot" ps
+      LEFT JOIN "RateModelParams" rmp
+        ON rmp.protocol = ps.protocol AND rmp.symbol = ps.symbol
+      WHERE ps.timestamp >= $1
+      ORDER BY ps.protocol, ps.symbol, ps.timestamp DESC
     `, freshSince)) as SnapshotRow[];
 
     // Pools (for pool-archetype protocols)
@@ -505,6 +529,18 @@ function toPoolRow(r: SnapshotRow) {
   // Compute a 30-element sparkline placeholder. Real values would need a
   // separate query (per-symbol PoolDaily); for now spark is a flat trend.
   const baseValue = r.totalSupplyUsd / 1e6;
+  // Risk params on PoolSnapshot are decimals (0-1). Surface as percent for
+  // the dashboard which expects whole-percent numbers.
+  const ltvPct = (r.ltv ?? 0) * 100;
+  const liqThresholdPct = (r.liquidationThreshold ?? 0) * 100;
+  // Aggregate market-level Health Factor. Per-user HF needs the user's
+  // collateral mix; at the market level we can compute the same quantity
+  // using totals: HF = (supplyUsd × LT) / borrowUsd. When a market has no
+  // borrows yet, HF is undefined (∞ in math, "—" in UI), so we encode it
+  // as null so the frontend can render "—".
+  const healthFactor = r.totalBorrowsUsd > 0
+    ? (r.totalSupplyUsd * (r.liquidationThreshold ?? 0)) / r.totalBorrowsUsd
+    : null;
   return {
     sym: r.symbol,
     name: r.symbol,
@@ -518,24 +554,24 @@ function toPoolRow(r: SnapshotRow) {
     spark: Array.from({ length: 30 }, () => baseValue),
     suppliers: 0,
     borrowers: 0,
-    ltv: 0,
-    liqThreshold: 0,
-    reserveFactor: 0,
-    // IRM parameters. PoolSnapshot doesn't currently store the rate-model
-    // params, so these are zero placeholders. Critically, they MUST be
-    // numbers (not undefined/null) — MarketDetail.html calls .toFixed() on
-    // each, and a missing field there throws "Cannot read properties of
-    // undefined" during render, unmounting the React tree → blank page.
-    // TODO: persist real per-pool IRM params on PoolSnapshot (or fetch from
-    // a new IRM table) so the Interest Rate Curve chart and the Param card
-    // show calibrated values instead of zeros.
-    irmKink: 80,
-    irmBaseRate: 0,
-    irmMultiplier: 0,
-    irmJumpMult: 0,
-    // Supply/borrow cap headroom on MarketDetail. The page has truthy
-    // guards (`market.supplyCap ? ... : 0`) so 0 is fine here, but we
-    // include the field so any other consumer doesn't trip on undefined.
+    // Risk parameters now sourced from PoolSnapshot (added 2026-05-04).
+    // Stored as decimal 0-1 on-chain; surfaced as whole percent here.
+    ltv: ltvPct,
+    liqThreshold: liqThresholdPct,
+    // Aggregate market HF. null when borrows are zero — frontend renders "—".
+    // Formula: HF = (collateralUsd × liquidationThreshold) / debtUsd. At HF<1
+    // a market-level position would be liquidatable; in practice individual
+    // wallets vary so this is a coarse health signal.
+    healthFactor,
+    // IRM parameters from the LEFT-joined RateModelParams. NULL when the
+    // adapter hasn't populated `irm` for this pool yet — coerce to 0 so
+    // the frontend can blindly call .toFixed().
+    reserveFactor:    (r.irmReserveFactor ?? 0) * 100, // decimal → percent
+    irmKink:          r.irmKink ?? 80,
+    irmBaseRate:      r.irmBaseRate ?? 0,
+    irmMultiplier:    r.irmMultiplier ?? 0,
+    irmJumpMult:      r.irmJumpMult ?? 0,
+    // Supply/borrow cap headroom — not yet persisted; placeholder 0.
     supplyCap: 0,
     borrowCap: 0,
     oracleSource: r.protocol === 'navi' || r.protocol === 'suilend' || r.protocol === 'scallop' || r.protocol === 'alphalend' ? 'Pyth' : 'Pyth',
