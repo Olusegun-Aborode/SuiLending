@@ -103,7 +103,23 @@ function KpiStrip({ items }) {
       <div className="grid grid-4" style={{ gap: 0 }}>
         {items.map(k => (
           <div key={k.id} className="metric">
-            <div className="metric-label">{k.label}</div>
+            <div className="metric-label">
+              {k.label}
+              {/* Optional methodology footnote — surfaces as a hover ⓘ next
+                  to the KPI label when the headline number comes from a
+                  source other than the protocol's own UI. Reuses the
+                  info-icon pattern from chart panel headers. */}
+              {k.note && (
+                <span className="info-icon" tabIndex={0} aria-label={k.note} style={{ marginLeft: 6, width: 13, height: 13 }}>
+                  <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <circle cx="8" cy="8" r="6.5" />
+                    <line x1="8" y1="7" x2="8" y2="11.5" />
+                    <circle cx="8" cy="4.8" r="0.4" fill="currentColor" />
+                  </svg>
+                  <span className="info-tip" role="tooltip">{k.note}</span>
+                </span>
+              )}
+            </div>
             <div className="metric-value">{k.value}</div>
             <div className="metric-footer">
               <span className={`delta ${k.change >= 0 ? 'up' : 'down'}`}>
@@ -330,9 +346,16 @@ function PageOverview() {
           render={({ metric, size }) => {
             const w = size === 'expanded' ? 1200 : 360;
             const h = size === 'expanded' ? 560 : 300;
+            // Pass through tvlNote so the Treemap tooltip can surface the
+            // methodology footnote when a protocol's headline differs from
+            // its own UI (currently only Bucket).
             const items = D.protocols.map(p => {
               const m = D.protocolMetrics.find(x => x.id === p.id);
-              return { id: p.id, name: p.name, value: m[metric] || m.tvl, color: p.color };
+              return {
+                id: p.id, name: p.name,
+                value: m[metric] || m.tvl, color: p.color,
+                note: metric === 'tvl' ? m.tvlNote : null,
+              };
             });
             const valueLabel = metric === 'tvl' ? 'TVL' : metric === 'supply' ? 'Supplied' : 'Borrowed';
             return <Treemap items={items} width={w} height={h} valueLabel={valueLabel} />;
@@ -409,7 +432,7 @@ function PageProtocol() {
       headerRight={headerSwitcher}
     >
       <KpiStrip items={[
-        { id: 'tvl',     label: 'Protocol TVL',      value: fmtUSD(metrics.tvl * 1e6, 1), change: 4.2 },
+        { id: 'tvl',     label: 'Protocol TVL',      value: fmtUSD(metrics.tvl * 1e6, 1), change: 4.2, note: metrics.tvlNote },
         { id: 'supply',  label: isPool ? 'Total Supplied' : 'Collateral Locked', value: fmtUSD((isPool ? metrics.supply : protoMarkets.reduce((s,v)=>s+v.collateralUsd,0)) * 1e6, 1), change: 5.0 },
         { id: 'borrow',  label: isPool ? 'Total Borrowed' : 'USDB Outstanding',  value: fmtUSD((isPool ? metrics.borrow : protoMarkets.reduce((s,v)=>s+v.debtUsd,0)) * 1e6, 1), change: 3.5 },
         { id: 'users',   label: 'Active Users',      value: fmtNum(metrics.users, 0), change: 2.8 },

@@ -415,6 +415,19 @@ function Treemap({ items, width = 400, height = 280, onSelect, selectedId, forma
               <span className="t-label">TOTAL</span>
               <span>{fmt(total)}</span>
             </div>
+            {/* Optional methodology note — surfaces when a tile's headline TVL
+                comes from a different source than the protocol's own UI (e.g.
+                Bucket displayed using DefiLlama's published number while
+                Bucket's own UI shows a slightly lower figure). Renders as a
+                small wrapped note under the totals. */}
+            {r.note && (
+              <div style={{
+                marginTop: 6, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.2)',
+                fontSize: 10, lineHeight: 1.35, opacity: 0.8, maxWidth: 260, whiteSpace: 'normal',
+              }}>
+                {r.note}
+              </div>
+            )}
           </div>
         );
       })()}

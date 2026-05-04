@@ -389,10 +389,21 @@ export async function GET() {
       // collateral types we haven't unwrapped).
       const ref = tvlReferenceByProto[p.id];
       const coverage = ref && ref > 0 ? Math.min(1, tvl / ref) : null;
+      // tvlNote: when the headline number differs materially from what the
+      // protocol's own UI displays, surface a short explanation so users
+      // see both perspectives without us pretending one is canonical. Today
+      // this only fires for Bucket — every other protocol's number matches
+      // its own UI exactly. The note describes the methodology gap rather
+      // than the specific dollar figure (which moves daily) so it doesn't
+      // need updating each time numbers shift.
+      const tvlNote = p.id === 'bucket' && method === 'remote'
+        ? "Headline TVL is DefiLlama's published figure for Bucket. Bucket's own UI may display a slightly lower number because they price LP-tokenized collateral (BUCKETUS, BLUEFIN_STABLE_LP, etc.) using different DEX SDK calls than DefiLlama uses."
+        : null;
       return {
         id: p.id,
         tvl,
         tvlMethod: method,                  // 'net' | 'gross' | 'remote' — for UI badges
+        tvlNote,                            // optional methodology footnote (string or null)
         netLiquidity,                       // legacy / alt-view number
         tvlReference: ref ?? null,
         tvlCoverage: coverage,
