@@ -1139,9 +1139,11 @@ function PageMarketDetail() {
               <ParamRow k="Supply APY" v={`${market.supplyApy.toFixed(2)}%`} c="var(--green)" />
               <ParamRow k="Borrow APY" v={`${market.borrowApy.toFixed(2)}%`} c="var(--red)" />
               <ParamRow k="Spread"     v={`${(market.borrowApy - market.supplyApy).toFixed(2)}%`} />
-              <ParamRow k="Base Rate"     v={`${market.irmBaseRate.toFixed(2)}%`} />
-              <ParamRow k="Multiplier"    v={`${market.irmMultiplier.toFixed(2)}%`} />
-              <ParamRow k="Jump Mult."    v={`${market.irmJumpMult.toFixed(2)}%`} />
+              {/* Null-guarded — old API rows may not include these fields,
+                  and undefined.toFixed() throws → unmounts the page. */}
+              <ParamRow k="Base Rate"     v={`${(market.irmBaseRate ?? 0).toFixed(2)}%`} />
+              <ParamRow k="Multiplier"    v={`${(market.irmMultiplier ?? 0).toFixed(2)}%`} />
+              <ParamRow k="Jump Mult."    v={`${(market.irmJumpMult ?? 0).toFixed(2)}%`} />
               <ParamRow k="Kink"          v={`${market.irmKink}%`} />
             </div>
           </div>

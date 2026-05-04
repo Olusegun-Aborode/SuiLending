@@ -521,7 +521,23 @@ function toPoolRow(r: SnapshotRow) {
     ltv: 0,
     liqThreshold: 0,
     reserveFactor: 0,
+    // IRM parameters. PoolSnapshot doesn't currently store the rate-model
+    // params, so these are zero placeholders. Critically, they MUST be
+    // numbers (not undefined/null) — MarketDetail.html calls .toFixed() on
+    // each, and a missing field there throws "Cannot read properties of
+    // undefined" during render, unmounting the React tree → blank page.
+    // TODO: persist real per-pool IRM params on PoolSnapshot (or fetch from
+    // a new IRM table) so the Interest Rate Curve chart and the Param card
+    // show calibrated values instead of zeros.
     irmKink: 80,
+    irmBaseRate: 0,
+    irmMultiplier: 0,
+    irmJumpMult: 0,
+    // Supply/borrow cap headroom on MarketDetail. The page has truthy
+    // guards (`market.supplyCap ? ... : 0`) so 0 is fine here, but we
+    // include the field so any other consumer doesn't trip on undefined.
+    supplyCap: 0,
+    borrowCap: 0,
     oracleSource: r.protocol === 'navi' || r.protocol === 'suilend' || r.protocol === 'scallop' || r.protocol === 'alphalend' ? 'Pyth' : 'Pyth',
     apyHistory: Array.from({ length: 90 }, (_, i) => ({ day: i, supply: r.supplyApy, borrow: r.borrowApy })),
     history:    Array.from({ length: 90 }, (_, i) => ({ day: i, supply: baseValue, borrow: r.totalBorrowsUsd / 1e6 })),
