@@ -398,8 +398,45 @@ function PageOverview() {
 }
 
 // ════════════════════════════════════════════════════════════════
-// PAGE 2 — Protocol (one protocol focus, switchable in header)
+// PAGE 2 — Protocol (one protocol focus, tab-switched)
 // ════════════════════════════════════════════════════════════════
+
+/**
+ * Tab strip for switching protocols on the Protocol page.
+ *
+ * Replaces the previous header dropdown — protocol selection is the page's
+ * primary axis (every chart filters by the active protocol), so it should
+ * be visible and one-click instead of buried in a dropdown.
+ *
+ * Each tab shows: protocol-color dot, name, archetype badge (POOL/CDP).
+ * Active tab gets a colored bottom border using the protocol's brand color
+ * so it's identifiable at a glance even on the per-protocol page header
+ * matches the tab.
+ */
+function ProtocolTabs({ active, onChange, protocols }) {
+  return (
+    <div className="protocol-tabs">
+      {protocols.map(p => {
+        const isActive = active === p.id;
+        const archetype = p.archetype === 'pool' ? 'POOL' : 'CDP';
+        return (
+          <button
+            key={p.id}
+            type="button"
+            className={`protocol-tab ${isActive ? 'active' : ''}`}
+            style={isActive ? { borderBottomColor: p.color } : undefined}
+            onClick={() => onChange(p.id)}
+          >
+            <span className="protocol-tab-dot" style={{ background: p.color }} />
+            <span className="protocol-tab-name">{p.name}</span>
+            <span className="protocol-tab-archetype">{archetype}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function PageProtocol() {
   const params = new URLSearchParams(window.location.search);
   const initial = params.get('protocol') || 'navi';
@@ -413,28 +450,21 @@ function PageProtocol() {
 
   const tvlIdx = D.protocols.findIndex(p => p.id === active);
 
-  const headerSwitcher = (
-    <Dropdown
-      label="Protocol"
-      value={active}
-      items={D.protocols.map(p => ({ id: p.id, label: `${p.name} (${p.archetype})`, swatch: p.color }))}
-      onChange={(id) => {
-        setActive(id);
-        // keep URL in sync so reload / share preserves selection
-        const u = new URL(window.location.href);
-        u.searchParams.set('protocol', id);
-        window.history.replaceState({}, '', u.toString());
-      }}
-    />
-  );
+  const onProtocolChange = (id) => {
+    setActive(id);
+    // keep URL in sync so reload / share preserves selection
+    const u = new URL(window.location.href);
+    u.searchParams.set('protocol', id);
+    window.history.replaceState({}, '', u.toString());
+  };
 
   return (
     <PageShell
       pageId="protocol"
       title={`${proto.name} — ${proto.archetype === 'pool' ? 'Pool-Based Lending' : 'Collateralized Debt Position'}`}
       terminal={`protocol-${active}`}
-      headerRight={headerSwitcher}
     >
+      <ProtocolTabs active={active} protocols={D.protocols} onChange={onProtocolChange} />
       <KpiStrip items={[
         { id: 'tvl',     label: 'Protocol TVL',      value: fmtUSD(metrics.tvl * 1e6, 1), change: 4.2, note: metrics.tvlNote },
         { id: 'supply',  label: isPool ? 'Total Supplied' : 'Collateral Locked', value: fmtUSD((isPool ? metrics.supply : protoMarkets.reduce((s,v)=>s+v.collateralUsd,0)) * 1e6, 1), change: 5.0 },
