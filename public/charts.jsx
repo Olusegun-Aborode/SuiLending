@@ -208,43 +208,73 @@ function AreaChart({ series, stacked = false, width = 800, height = 280, formatt
 }
 
 // ── StackedBarChart ──────────────────────────────────────
-function StackedBarChart({ data, keys, colors, width = 800, height = 220, formatter = fmtUSD }) {
+//
+// Daily Flows uses this. Hover behaviour notes:
+//   - hit-detection on the WHOLE inner chart area (not per-bar onMouseEnter)
+//     so the tooltip doesn't flicker off in the gap between thin bars
+//   - coords are converted from client px → svg viewBox units before
+//     positioning the tooltip, so the cursor-following position is honest
+//     across responsive widths (svg renders at width="100%" but uses a
+//     fixed viewBox)
+//   - vertical indicator line + circle-on-cursor mark the hovered column
+//   - keyLabels prop pretty-prints raw stack keys ("supply" → "Supply")
+//
+function StackedBarChart({ data, keys, colors, width = 800, height = 220, formatter = fmtUSD, keyLabels }) {
   const padL = 54, padR = 18, padT = 12, padB = 26;
-  const iw = width - padL - padR, ih = height - padT - padB;
+  const w = width, h = height;
+  const iw = w - padL - padR, ih = h - padT - padB;
+  // hover: { i: data index, x: svg-x of column center, my: svg-y of cursor }
   const [hover, setHover] = useState(null);
 
   const totals = data.map(d => keys.reduce((a, k) => a + d[k], 0));
   const maxY = Math.max(...totals) * 1.1;
   const n = data.length;
-  const bw = iw / n * 0.7;
-  const gap = iw / n * 0.3;
-  const x = (i) => padL + i * (iw / n) + gap / 2;
+  const colW = iw / n;             // total column width (bar + gap)
+  const bw = colW * 0.7;
+  const gap = colW * 0.3;
+  const x = (i) => padL + i * colW + gap / 2;
   const y = (v) => padT + ih - (v / maxY) * ih;
 
   const ticks = [0, 0.25, 0.5, 0.75, 1].map(t => maxY * t);
 
+  // Translate cursor position → which column it falls in. Works in the gap
+  // between bars too, so the tooltip stays glued to the nearest column
+  // instead of flickering on/off as the cursor crosses gaps.
+  const onMove = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const sx = w / rect.width;
+    const sy = h / rect.height;
+    const mx = (e.clientX - rect.left) * sx;
+    const my = (e.clientY - rect.top) * sy;
+    if (mx < padL - 4 || mx > padL + iw + 4) { setHover(null); return; }
+    const idx = Math.max(0, Math.min(n - 1, Math.floor((mx - padL) / colW)));
+    setHover({ i: idx, x: x(idx) + bw / 2, my });
+  };
+
   return (
     <div style={{ position: 'relative' }}>
-      <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} style={{ display: 'block' }}
-        onMouseLeave={() => setHover(null)}
+      <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h}
+        style={{ display: 'block', cursor: 'crosshair' }}
+        onMouseMove={onMove} onMouseLeave={() => setHover(null)}
       >
         {ticks.map((t, i) => (
           <g key={i}>
-            <line x1={padL} x2={width - padR} y1={y(t)} y2={y(t)} stroke="var(--border)" strokeDasharray="2 3" />
+            <line x1={padL} x2={w - padR} y1={y(t)} y2={y(t)} stroke="var(--border)" strokeDasharray="2 3" />
             <text x={padL - 8} y={y(t) + 4} textAnchor="end" fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-muted)">
               {formatter(t, 0)}
             </text>
           </g>
         ))}
         {[0, Math.floor(n/4), Math.floor(n/2), Math.floor(3*n/4), n-1].map(i => (
-          <text key={i} x={x(i) + bw / 2} y={height - 8} textAnchor="middle" fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-muted)">
+          <text key={i} x={x(i) + bw / 2} y={h - 8} textAnchor="middle" fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-muted)">
             {daysAgoLabel(i, n)}
           </text>
         ))}
         {data.map((d, i) => {
           let acc = 0;
+          const dim = hover && hover.i !== i;
           return (
-            <g key={i} onMouseEnter={() => setHover({ i, x: x(i) + bw / 2 })}>
+            <g key={i}>
               {keys.map((k, ki) => {
                 const v = d[k];
                 const y0 = y(acc);
@@ -255,34 +285,53 @@ function StackedBarChart({ data, keys, colors, width = 800, height = 220, format
                     x={x(i)} y={y1}
                     width={bw} height={Math.max(0.5, y0 - y1)}
                     fill={colors[ki]}
-                    opacity={hover && hover.i !== i ? 0.35 : 0.92}
+                    opacity={dim ? 0.35 : 0.92}
                   />
                 );
               })}
-              <rect x={x(i) - 2} y={padT} width={bw + 4} height={ih} fill="transparent" />
             </g>
           );
         })}
-        <ChartWatermark x={width - 20} y={padT + 16} />
+        {/* Vertical indicator line at the hovered column, mirrors AreaChart's
+            cursor mark so users have a clear sense of "which day am I on". */}
+        {hover && (
+          <g>
+            <line x1={hover.x} x2={hover.x} y1={padT} y2={padT + ih}
+              stroke="var(--orange)" strokeWidth="1" opacity="0.7" />
+            <circle cx={hover.x} cy={y(totals[hover.i])} r="3.5"
+              fill="var(--orange)" stroke="var(--surface)" strokeWidth="1.5" />
+          </g>
+        )}
+        <ChartWatermark x={w - 20} y={padT + 16} />
       </svg>
-      {hover && (
-        <div className="chart-tooltip" style={{
-          left: Math.min(hover.x + 12, width - 180),
-          top: 10,
-        }}>
-          <div className="t-date">{daysAgoLabel(hover.i, n)}</div>
-          {keys.map((k, ki) => (
-            <div key={k} className="t-row">
-              <span className="t-label"><span className="legend-swatch" style={{ background: colors[ki], marginRight: 6 }} />{k}</span>
-              <span>{formatter(data[hover.i][k], 1)}</span>
+      {hover && (() => {
+        // Convert svg-space hover position → CSS percentages so absolute
+        // positioning over the SVG holds at any rendered width. Vertical
+        // clamp keeps the tip from hanging off the panel.
+        const cssX = Math.min((hover.x + 14) / w * 100, 100 - 24);
+        const cssY = Math.max(2, Math.min((hover.my - 12) / h * 100, 100 - 36));
+        return (
+          <div className="chart-tooltip" style={{
+            left: `${cssX}%`,
+            top: `${cssY}%`,
+          }}>
+            <div className="t-date">{daysAgoLabel(hover.i, n)}</div>
+            {keys.map((k, ki) => (
+              <div key={k} className="t-row">
+                <span className="t-label">
+                  <span className="legend-swatch" style={{ background: colors[ki], marginRight: 6 }} />
+                  {(keyLabels && keyLabels[k]) || (k.charAt(0).toUpperCase() + k.slice(1))}
+                </span>
+                <span>{formatter(data[hover.i][k], 1)}</span>
+              </div>
+            ))}
+            <div className="t-row" style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.2)' }}>
+              <span className="t-label">TOTAL</span>
+              <span>{formatter(totals[hover.i], 1)}</span>
             </div>
-          ))}
-          <div className="t-row" style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.2)' }}>
-            <span className="t-label">TOTAL</span>
-            <span>{formatter(totals[hover.i], 1)}</span>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

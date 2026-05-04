@@ -383,9 +383,13 @@ function PageOverview() {
             const colors = metric === 'all'
               ? ['#FF6B35', '#3B5FE0', '#D6322E']
               : [metric === 'supply' ? '#FF6B35' : metric === 'borrow' ? '#3B5FE0' : '#D6322E'];
+            // Pretty labels for the tooltip. Bare keys "supply"/"borrow"/"liquid"
+            // would otherwise render lowercase. Single-metric views still get
+            // the matching label since the dropdown filters by `metric`.
+            const keyLabels = { supply: 'Supply', borrow: 'Borrow', liquid: 'Liquidations' };
             // volumeSeries carries 90 daily rows; slice tail by the active window.
             const sliced = D.volumeSeries.slice(-timeframe);
-            return <StackedBarChart data={sliced} keys={keys} colors={colors} width={w} height={h} formatter={v => `$${v.toFixed(1)}M`} />;
+            return <StackedBarChart data={sliced} keys={keys} colors={colors} keyLabels={keyLabels} width={w} height={h} formatter={v => `$${v.toFixed(1)}M`} />;
           }}
         />
       </div>
