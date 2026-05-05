@@ -575,8 +575,16 @@ function toPoolRow(r: SnapshotRow) {
     supplyCap: 0,
     borrowCap: 0,
     oracleSource: r.protocol === 'navi' || r.protocol === 'suilend' || r.protocol === 'scallop' || r.protocol === 'alphalend' ? 'Pyth' : 'Pyth',
-    apyHistory: Array.from({ length: 90 }, (_, i) => ({ day: i, supply: r.supplyApy, borrow: r.borrowApy })),
-    history:    Array.from({ length: 90 }, (_, i) => ({ day: i, supply: baseValue, borrow: r.totalBorrowsUsd / 1e6 })),
+    // NOTE: `apyHistory` and `history` USED to be 90-element flat-fill arrays
+    // here (every entry = today's value, since we don't have real per-day
+    // pool history yet). At ~13.8KB per pool × 90 pools that's 1.2MB of pure
+    // placeholder noise per response — caused /api/sui-lending to come back
+    // ~3.8s with a 1.4MB body, which the embedded iframe perceived as a
+    // timeout. Removed; MarketDetail rebuilds these flat-fills client-side
+    // from `supply` / `borrow` / `supplyApy` / `borrowApy` on demand.
+    // Once we capture real daily pool history (PoolDaily already exists for
+    // protocol-level aggregates — needs a per-symbol query), wire that in
+    // here instead of synthesising flat lines.
   };
 }
 

@@ -1204,9 +1204,15 @@ function PageMarketDetail() {
               const w = size === 'expanded' ? 1200 : 540;
               const h = size === 'expanded' ? 520 : 280;
               const scale = metric === 'token' ? 1e6 / price : 1e6;
+              // Synthesize flat-line history if the API didn't ship one
+              // (we trimmed per-pool history arrays from the bulk response
+              // for payload-size reasons — they were 1.2MB of pure noise).
+              const hist = market.history && market.history.length
+                ? market.history.slice(-30)
+                : Array.from({ length: 30 }, (_, i) => ({ day: i, supply: market.supply, borrow: market.borrow }));
               const series = [
-                { name: 'Supply', color: '#FF6B35', values: market.history.slice(-30).map(d => d.supply * scale) },
-                { name: 'Borrow', color: '#3B5FE0', values: market.history.slice(-30).map(d => d.borrow * scale) },
+                { name: 'Supply', color: '#FF6B35', values: hist.map(d => d.supply * scale) },
+                { name: 'Borrow', color: '#3B5FE0', values: hist.map(d => d.borrow * scale) },
               ];
               return <AreaChart series={series} width={w} height={h} formatter={metric === 'token' ? (v => fmtNum(v, 0)) : fmtUSD} />;
             }}
@@ -1220,9 +1226,12 @@ function PageMarketDetail() {
             render={({ size }) => {
               const w = size === 'expanded' ? 1200 : 540;
               const h = size === 'expanded' ? 520 : 280;
+              const apyHist = market.apyHistory && market.apyHistory.length
+                ? market.apyHistory.slice(-30)
+                : Array.from({ length: 30 }, (_, i) => ({ day: i, supply: market.supplyApy, borrow: market.borrowApy }));
               const series = [
-                { name: 'Supply APY', color: 'var(--green)', values: market.apyHistory.slice(-30).map(d => d.supply) },
-                { name: 'Borrow APY', color: 'var(--red)',   values: market.apyHistory.slice(-30).map(d => d.borrow) },
+                { name: 'Supply APY', color: 'var(--green)', values: apyHist.map(d => d.supply) },
+                { name: 'Borrow APY', color: 'var(--red)',   values: apyHist.map(d => d.borrow) },
               ];
               return <AreaChart series={series} width={w} height={h} formatter={v => `${v.toFixed(2)}%`} />;
             }}
