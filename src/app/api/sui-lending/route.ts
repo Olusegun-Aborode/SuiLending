@@ -216,6 +216,32 @@ export async function GET() {
       arr[k].liquidity += r.closeLiquidityUsd    || 0;
     }
 
+    // DefiLlama historical TVL fallback. Our PoolDaily history is sparse for
+    // the non-NAVI protocols (their crons failed for long stretches), leaving
+    // big holes in the TVL-by-Protocol chart. The DefillamaTvl table
+    // (populated by scripts/backfill-defillama.ts) carries 1-3 years of daily
+    // protocol-level TVL. We index it by the same dayKey so the chart builder
+    // can fall back to it on any day PoolDaily has no value. Value is $M.
+    const dlamaByProto = new Map<string, number[]>();
+    try {
+      const dlamaRows = (await db.$queryRawUnsafe(`
+        SELECT protocol, date, "tvlUsd"::float8
+        FROM "DefillamaTvl"
+        WHERE date >= $1
+        ORDER BY protocol, date
+      `, since)) as Array<{ protocol: string; date: Date; tvlUsd: number }>;
+      for (const r of dlamaRows) {
+        const k = dayKey(r.date);
+        if (k < 0 || k >= days) continue;
+        let arr = dlamaByProto.get(r.protocol);
+        if (!arr) { arr = new Array(days).fill(0); dlamaByProto.set(r.protocol, arr); }
+        arr[k] = (r.tvlUsd || 0) / 1e6; // → $M
+      }
+    } catch (e) {
+      // Table may not exist yet on a fresh DB — degrade gracefully to no fallback.
+      console.warn('[sui-lending] DefillamaTvl fallback unavailable:', e instanceof Error ? e.message : e);
+    }
+
     // Build tvlSeries — frontend expects `[ [{day, value, protocol}, ...], ... ]`
     // ordered by `protocols` array. Missing days fall back to 0.
     //
@@ -230,10 +256,18 @@ export async function GET() {
     const tvlSeries = protocols.map((p) => {
       const arr = aggByProto.get(p.id) ?? Array.from({ length: days }, (_, i) => ({ day: i, supply: 0, borrow: 0, liquidity: 0 }));
       const method = PROTOCOL_TVL_METHOD[p.id] ?? 'gross';
+      const dlama = dlamaByProto.get(p.id);
       return arr.map((d) => {
-        const value = method === 'net'
+        // Our computed value from PoolDaily for this day. A real lending pool
+        // always has supply > 0, so supply === 0 means "no PoolDaily data for
+        // this day" — a gap to fill from DefiLlama history.
+        const computed = method === 'net'
           ? (d.supply - d.borrow) / 1e6
           : d.supply / 1e6;
+        const hasOwnData = d.supply > 0;
+        const value = hasOwnData
+          ? computed
+          : (dlama && dlama[d.day] > 0 ? dlama[d.day] : computed);
         return { day: d.day, value, protocol: p.id };
       });
     });
