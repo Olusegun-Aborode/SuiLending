@@ -418,37 +418,49 @@ function MethodologyPanel() {
     <div className="panel">
       <div className="panel-header">
         <span className="panel-title"><span className="bullet">●</span> Methodology</span>
-        <span className="panel-badge">v2.1.0</span>
+        <span className="panel-badge">Sui · 5 protocols</span>
       </div>
       <div className="panel-body">
         <div className="methodology">
-          <h4>Data sources</h4>
-          <p>
-            On-chain data is indexed via <span className="key">@datumlabs/data-connectors</span> from
-            <span className="key"> Allium</span>, <span className="key">Dune</span>, <span className="key">The Graph</span>, and
-            <span className="key"> Blockscout</span>. Price feeds are Chainlink oracles; fallback is CoinGecko (5-min delay).
-          </p>
-
-          <h4>Metric definitions</h4>
+          <h4>Data sources (per protocol)</h4>
           <ul>
-            <li><span className="key">TVL</span> = Σ (supplied − borrowed) × oracle price, per pool, per chain.</li>
-            <li><span className="key">Volume</span> = daily sum of supply, borrow, and liquidation notional.</li>
-            <li><span className="key">Utilization</span> = borrowed / supplied per pool.</li>
-            <li><span className="key">APY</span> uses protocol-native rate models (kinked at 80% util).</li>
-            <li><span className="key">Risk tier</span> is derived from oracle quality, depth, and volatility.</li>
+            <li><span className="key">NAVI</span> — official open API (open-api.naviprotocol.io) for pools; on-chain Sui RPC for liquidation events.</li>
+            <li><span className="key">Suilend</span> — @suilend/sdk reading the lending market on-chain.</li>
+            <li><span className="key">Scallop</span> — Scallop's hosted indexer (sdk.api.scallop.io).</li>
+            <li><span className="key">AlphaLend</span> — Sui GraphQL, walking the markets table's dynamic fields directly.</li>
+            <li><span className="key">Bucket</span> — @bucket-protocol/sdk plus on-chain dynamic-field walks for V1 CDPs, reservoirs, and Fountain/PSM surfaces.</li>
+            <li><span className="key">Asset prices</span> — DefiLlama coins API (coins.llama.fi). Every USD figure on the dashboard is priced through it.</li>
           </ul>
+
+          <h4>TVL definition (matches each protocol's own UI)</h4>
+          <p>Protocols don't agree on what "TVL" means, so we report what each one publishes about itself:</p>
+          <ul>
+            <li><span className="key">NAVI / Suilend / AlphaLend</span> = supplied − borrowed (their dashboards' headline figure).</li>
+            <li><span className="key">Scallop</span> = the canonical TVL its own indexer publishes.</li>
+            <li><span className="key">Bucket</span> = DefiLlama's published figure. Our direct on-chain walk captures ~$19M of collateral; the rest is LP-tokenized collateral (Cetus/Bluefin/Aftermath positions) we don't yet unwrap, so we defer to DefiLlama's ~$63M headline.</li>
+          </ul>
+
+          <h4>Where we use DefiLlama</h4>
+          <p>
+            DefiLlama backs three things: <span className="key">(1)</span> all asset USD prices, <span className="key">(2)</span> Bucket's
+            headline TVL, and <span className="key">(3)</span> historical TVL — the per-protocol chart history is sourced from DefiLlama's
+            daily series for any date our own on-chain indexing hadn't yet captured. Live values for NAVI / Suilend / Scallop / AlphaLend
+            are computed from on-chain / native-API data, not DefiLlama.
+          </p>
 
           <h4>Refresh cadence</h4>
           <p>
-            KPIs and charts refresh every <span className="key">30s</span>. Candlestick uses 24h close.
-            Activity feed streams via WebSocket (fallback: 5s poll). Cache layer is Redis; misses hit the chain RPC.
+            Pool snapshots, liquidations, and daily aggregates run on Vercel cron (daily). Per-wallet health factors refresh
+            <span className="key"> weekly</span>. The dashboard reads a 60-second edge-cached snapshot of the aggregated API.
           </p>
 
           <h4>Caveats</h4>
-          <p>
-            Cross-chain aggregation assumes USD-pegged stables are equivalent. Liquidation detection may lag 1–2 blocks
-            on non-Ethereum chains. Historical data before 90 days is interpolated from hourly snapshots.
-          </p>
+          <ul>
+            <li>Historical TVL filled from DefiLlama uses DefiLlama's definition — on the net-TVL protocols a small step can appear where backfilled history meets live values.</li>
+            <li>Revenue and Daily-Flows history is sparse on dates where our own indexing had gaps (not backfilled from DefiLlama, which lacks per-day borrow detail).</li>
+            <li>Bucket liquidation events are current through the latest on-chain V1 event (Feb 2026); V2 event-type coverage is under review.</li>
+            <li>Liquidation USD values use event-time prices where the event carries them, else current oracle price.</li>
+          </ul>
         </div>
       </div>
     </div>

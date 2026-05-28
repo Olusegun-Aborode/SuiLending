@@ -393,6 +393,13 @@ function PageOverview() {
           }}
         />
       </div>
+
+      {/* Methodology — surfaced at the bottom of Overview so the data-source
+          and TVL-definition disclosures (including where we rely on DefiLlama)
+          are visible to every user, not buried behind a dead nav link. */}
+      <div style={{ marginTop: 16 }}>
+        <MethodologyPanel />
+      </div>
     </PageShell>
   );
 }
