@@ -2,7 +2,7 @@
   "crons": [
     { "path": "/api/navi/cron/collect-pools",         "schedule": "0 0 * * *" },
     { "path": "/api/navi/cron/index-liquidations",    "schedule": "15 0 * * *" },
-    { "path": "/api/navi/cron/index-wallets",         "schedule": "30 0 * * *" },
+    { "path": "/api/navi/cron/index-wallets",         "schedule": "30 0 * * 0" },
     { "path": "/api/navi/cron/aggregate-pairs",       "schedule": "45 0 * * *" },
     { "path": "/api/navi/cron/aggregate-daily",       "schedule": "5 1 * * *" },
 
