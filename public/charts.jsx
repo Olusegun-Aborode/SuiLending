@@ -761,4 +761,117 @@ function Histogram({ bins, width = 800, height = 280, color = 'var(--orange)',
   );
 }
 
-Object.assign(window, { AreaChart, StackedBarChart, Treemap, Sparkline, Leaderboard, Heatmap, Candlestick, Histogram });
+// ── DataTable ────────────────────────────────────────────
+//
+// Required by §6 of the Lending Analysis Standard:
+//   "numeric columns use mono/tabular figures for vertical alignment;
+//    label columns use the display face; thin top/bottom rule, no vertical
+//    lines; sortable; horizontally scrollable on mobile."
+//
+// columns: [{
+//   id, label, align?: 'left'|'right'|'center', numeric?: bool,
+//   sortable?: bool, accessor?: (row) => sortable-value,
+//   render?: (row, idx) => ReactNode,
+//   width?: string,
+// }]
+// rows: any[]
+// initialSort: { id, dir: 'asc'|'desc' }
+// emptyMessage: shown when rows is empty
+// maxHeight: when set, the body scrolls vertically with a sticky header
+function DataTable({ columns, rows, initialSort = null, emptyMessage = 'No rows.', maxHeight = null }) {
+  const [sort, setSort] = useState(initialSort);
+
+  // Apply sort if a sortable column was clicked.
+  const sortedRows = useMemo(() => {
+    if (!sort) return rows;
+    const col = columns.find(c => c.id === sort.id);
+    if (!col) return rows;
+    const acc = col.accessor || ((r) => r[col.id]);
+    const dir = sort.dir === 'asc' ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      const av = acc(a), bv = acc(b);
+      // null / undefined sort to bottom regardless of direction
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+      return String(av).localeCompare(String(bv)) * dir;
+    });
+  }, [rows, sort, columns]);
+
+  const toggleSort = (col) => {
+    if (col.sortable === false) return;
+    if (!sort || sort.id !== col.id) setSort({ id: col.id, dir: col.numeric ? 'desc' : 'asc' });
+    else setSort({ id: col.id, dir: sort.dir === 'asc' ? 'desc' : 'asc' });
+  };
+
+  const inner = (
+    <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <thead style={maxHeight ? { position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1 } : undefined}>
+        <tr style={{ borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)' }}>
+          {columns.map(col => {
+            const align = col.align || (col.numeric ? 'right' : 'left');
+            const isActive = sort && sort.id === col.id;
+            const arrow = !isActive ? '' : sort.dir === 'asc' ? ' ↑' : ' ↓';
+            return (
+              <th key={col.id}
+                style={{
+                  padding: '10px 12px', textAlign: align,
+                  fontFamily: 'var(--font-mono)', fontSize: 10, letterSpacing: '0.08em',
+                  color: 'var(--fg-muted)', fontWeight: 600, textTransform: 'uppercase',
+                  cursor: col.sortable === false ? 'default' : 'pointer',
+                  userSelect: 'none',
+                  width: col.width,
+                  whiteSpace: 'nowrap',
+                }}
+                onClick={() => toggleSort(col)}
+                title={col.sortable === false ? '' : 'Click to sort'}
+              >
+                {col.label}{arrow}
+              </th>
+            );
+          })}
+        </tr>
+      </thead>
+      <tbody>
+        {sortedRows.length === 0 && (
+          <tr>
+            <td colSpan={columns.length} style={{ padding: '24px 12px', textAlign: 'center', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+              {emptyMessage}
+            </td>
+          </tr>
+        )}
+        {sortedRows.map((row, idx) => (
+          <tr key={row.__id ?? idx}
+            style={{ borderBottom: idx === sortedRows.length - 1 ? '1px solid var(--border)' : '1px solid var(--border-soft)' }}>
+            {columns.map(col => {
+              const align = col.align || (col.numeric ? 'right' : 'left');
+              const value = col.render ? col.render(row, idx) : row[col.id];
+              const fontFamily = col.numeric ? 'var(--font-mono)' : 'inherit';
+              const fontVariantNumeric = col.numeric ? 'tabular-nums' : 'normal';
+              return (
+                <td key={col.id}
+                  style={{
+                    padding: '10px 12px', textAlign: align,
+                    fontFamily, fontVariantNumeric,
+                    fontSize: 13, color: 'var(--fg)',
+                    whiteSpace: col.wrap ? 'normal' : 'nowrap',
+                  }}>
+                  {value == null ? '—' : value}
+                </td>
+              );
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+
+  return (
+    <div style={{ overflowX: 'auto', overflowY: maxHeight ? 'auto' : 'visible', maxHeight: maxHeight || undefined }}>
+      {inner}
+    </div>
+  );
+}
+
+Object.assign(window, { AreaChart, StackedBarChart, Treemap, Sparkline, Leaderboard, Heatmap, Candlestick, Histogram, DataTable });

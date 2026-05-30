@@ -14,6 +14,8 @@ const PAGES = [
   // leaderboard, HHI, days-since-bad-debt.
   { id: 'risk',        label: 'Risk',        href: 'Risk.html',        icon: '!' },
   { id: 'liquidation', label: 'Liquidation', href: 'Liquidation.html', icon: '✖' },
+  // Compare page per §6: side-by-side protocol metrics on every headline figure.
+  { id: 'compare',     label: 'Compare',     href: 'Compare.html',     icon: '⇄' },
 ];
 window.PAGES = PAGES;
 

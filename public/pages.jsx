@@ -1940,4 +1940,176 @@ function ParamRow({ k, v, c }) {
   );
 }
 
-Object.assign(window, { PageOverview, PageProtocol, PageRates, PageRevenue, PageCollateral, PageRisk, PageLiquidation, PageMarketDetail });
+// ════════════════════════════════════════════════════════════════
+// PAGE — Compare (cross-protocol side-by-side per §6)
+// ════════════════════════════════════════════════════════════════
+//
+// Standard requires "Side-by-side protocol metrics on every headline figure"
+// in a sortable table. Each row is a protocol; each column a headline
+// metric. Clicking any column header re-sorts. Protocol column links back
+// to that protocol's detail view.
+function PageCompare() {
+  const protos = D.protocols || [];
+  const metrics = D.protocolMetrics || [];
+  const STABLE_SYMS = new Set([
+    'USDC','USDT','USDsui','USDSUI','USDB','AUSD','BUCK','FDUSD','wUSDC','wUSDT','suiUSDT','USDY','mUSD',
+  ]);
+
+  // Build one row per protocol, aggregating row-level data so each headline
+  // metric has a sortable numeric value.
+  const rows = protos.map(p => {
+    const m = metrics.find(x => x.id === p.id) || {};
+    const pool = D.pools.filter(x => x.protocol === p.id);
+    const vault = D.vaults.filter(x => x.protocol === p.id);
+    const all = [...pool, ...vault];
+
+    // Weighted average APYs by supply / borrow.
+    const wSup = all.reduce((s, r) => s + (r.supplyApy || 0) * (r.supply || 0), 0);
+    const wSupTot = all.reduce((s, r) => s + (r.supply || 0), 0);
+    const wBor = all.reduce((s, r) => s + (r.borrowApy || 0) * (r.borrow || 0), 0);
+    const wBorTot = all.reduce((s, r) => s + (r.borrow || 0), 0);
+    const supplyApy = wSupTot > 0 ? wSup / wSupTot : 0;
+    const borrowApy = wBorTot > 0 ? wBor / wBorTot : 0;
+    const utilization = wSupTot > 0 ? wBorTot / wSupTot * 100 : 0;
+
+    // Asset HHI per protocol (collateral concentration).
+    const supplyByAsset = all.reduce((acc, r) => {
+      const sym = r.sym || r.asset || '?';
+      acc[sym] = (acc[sym] || 0) + (r.supply || r.collateralUsd || 0);
+      return acc;
+    }, {});
+    const totSup = Object.values(supplyByAsset).reduce((s, v) => s + v, 0);
+    const hhi = totSup > 0 ? Object.values(supplyByAsset).reduce((s, v) => {
+      const share = v / totSup * 100;
+      return s + share * share;
+    }, 0) : 0;
+
+    // Stable debt share per protocol.
+    let stableBorrow = 0, totalBorrow = 0;
+    pool.forEach(r => { totalBorrow += r.borrow || 0; if (STABLE_SYMS.has(r.sym)) stableBorrow += r.borrow || 0; });
+    vault.forEach(r => { totalBorrow += r.debtUsd || 0; stableBorrow += r.debtUsd || 0; });
+    const stableDebtShare = totalBorrow > 0 ? stableBorrow / totalBorrow * 100 : 0;
+
+    // Fee run-rate (annualized) + take rate.
+    const feesAnnual = (m.fees || 0) * 1e6;
+    const takeRate = m.tvl > 0 ? (m.fees / m.tvl * 100) : 0;
+
+    return {
+      id: p.id,
+      protocol: p.name,
+      color: p.color,
+      archetype: p.archetype,
+      tvl: m.tvl || 0,
+      tvlMethod: m.tvlMethod,
+      supply: m.supply || 0,
+      borrow: m.borrow || 0,
+      utilization,
+      supplyApy,
+      borrowApy,
+      feesAnnual,
+      takeRate,
+      hhi,
+      stableDebtShare,
+      markets: all.length,
+    };
+  });
+
+  // Compose columns — each declares sortable + numeric, and supplies a
+  // render() if it needs formatting beyond the raw value.
+  const columns = [
+    {
+      id: 'protocol', label: 'Protocol', sortable: true,
+      render: (r) => (
+        <a href={`Protocol.html?protocol=${r.id}`}
+          onClick={() => typeof showNavSplash === 'function' && showNavSplash()}
+          style={{ color: 'inherit', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 4, background: r.color, flexShrink: 0 }} />
+          <span style={{ fontWeight: 600 }}>{r.protocol}</span>
+          <span style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--fg-dim)', padding: '1px 4px', border: '1px solid var(--border)', borderRadius: 2, letterSpacing: '0.04em' }}>
+            {r.archetype === 'pool' ? 'POOL' : 'CDP'}
+          </span>
+        </a>
+      ),
+    },
+    { id: 'tvl', label: 'TVL ($M)', sortable: true, numeric: true, render: (r) => fmtUSD(r.tvl * 1e6, 1) },
+    { id: 'supply', label: 'Supplied ($M)', sortable: true, numeric: true, render: (r) => fmtUSD(r.supply * 1e6, 1) },
+    { id: 'borrow', label: 'Borrowed ($M)', sortable: true, numeric: true, render: (r) => fmtUSD(r.borrow * 1e6, 1) },
+    { id: 'utilization', label: 'Util.', sortable: true, numeric: true,
+      render: (r) => (
+        <span style={{ color: r.utilization > 80 ? 'var(--red)' : r.utilization > 50 ? 'var(--orange)' : 'var(--fg)' }}>
+          {r.utilization.toFixed(1)}%
+        </span>
+      ),
+    },
+    { id: 'supplyApy', label: 'Sup. APY', sortable: true, numeric: true,
+      render: (r) => <span style={{ color: 'var(--green)' }}>{r.supplyApy.toFixed(2)}%</span> },
+    { id: 'borrowApy', label: 'Bor. APY', sortable: true, numeric: true,
+      render: (r) => <span style={{ color: 'var(--red)' }}>{r.borrowApy.toFixed(2)}%</span> },
+    { id: 'feesAnnual', label: 'Fees (annual)', sortable: true, numeric: true, render: (r) => fmtUSD(r.feesAnnual, 1) },
+    { id: 'takeRate', label: 'Take Rate', sortable: true, numeric: true,
+      render: (r) => (
+        <span style={{ color: r.takeRate > 3 ? 'var(--red)' : r.takeRate > 1 ? 'var(--orange)' : 'var(--green)' }}>
+          {r.takeRate.toFixed(2)}%
+        </span>
+      ),
+    },
+    { id: 'hhi', label: 'Asset HHI', sortable: true, numeric: true,
+      render: (r) => (
+        <span style={{ color: r.hhi > 2500 ? 'var(--red)' : r.hhi > 1500 ? 'var(--orange)' : 'var(--fg)' }}>
+          {r.hhi.toFixed(0)}
+        </span>
+      ),
+    },
+    { id: 'stableDebtShare', label: 'Stable Debt', sortable: true, numeric: true, render: (r) => `${r.stableDebtShare.toFixed(0)}%` },
+    { id: 'markets', label: 'Markets', sortable: true, numeric: true },
+    { id: 'tvlMethod', label: 'TVL src', sortable: true,
+      render: (r) => (
+        <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--fg-dim)', padding: '1px 5px', border: '1px solid var(--border)', borderRadius: 2, letterSpacing: '0.04em' }}>
+          {(r.tvlMethod || 'gross').toUpperCase()}
+        </span>
+      ),
+    },
+  ];
+
+  // Sector totals row for context (rendered separately above the table).
+  const sectorTvl = rows.reduce((s, r) => s + r.tvl, 0);
+  const sectorSup = rows.reduce((s, r) => s + r.supply, 0);
+  const sectorBor = rows.reduce((s, r) => s + r.borrow, 0);
+  const sectorUtil = sectorSup > 0 ? sectorBor / sectorSup * 100 : 0;
+  const sectorFees = rows.reduce((s, r) => s + r.feesAnnual, 0);
+
+  return (
+    <PageShell pageId="compare" title="Lending Terminal: SUI — Compare" terminal="lending-terminal-sui-compare">
+      <KpiStrip items={[
+        { id: 'st',  label: 'Sector TVL',        value: fmtUSD(sectorTvl * 1e6, 1), change: 0, subLabel: `${rows.length} protocols` },
+        { id: 'ss',  label: 'Sector Supplied',   value: fmtUSD(sectorSup * 1e6, 1), change: 0 },
+        { id: 'sb',  label: 'Sector Borrowed',   value: fmtUSD(sectorBor * 1e6, 1), change: 0, subLabel: `util ${sectorUtil.toFixed(1)}%` },
+        { id: 'sf',  label: 'Sector Fees (annual)', value: fmtUSD(sectorFees, 1), change: 0 },
+      ]} />
+
+      <div style={{ marginTop: 16 }}>
+        <div className="panel">
+          <div className="panel-header">
+            <span className="panel-title"><span className="bullet">●</span> Side-by-side headline metrics</span>
+            <span style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
+              click any column to sort · §6 Compare
+            </span>
+          </div>
+          <div className="panel-body" style={{ padding: '0 16px 16px' }}>
+            <DataTable
+              columns={columns}
+              rows={rows}
+              initialSort={{ id: 'tvl', dir: 'desc' }}
+              emptyMessage="No protocols loaded."
+            />
+            <div style={{ marginTop: 12, fontSize: 10, color: 'var(--fg-dim)', fontFamily: 'var(--font-mono)', textAlign: 'right' }}>
+              TVL src: NET = supply−borrow per protocol UI · GROSS = total deposits · REMOTE = canonical fetch (Scallop indexer / DefiLlama)
+            </div>
+          </div>
+        </div>
+      </div>
+    </PageShell>
+  );
+}
+
+Object.assign(window, { PageOverview, PageProtocol, PageRates, PageRevenue, PageCollateral, PageRisk, PageLiquidation, PageCompare, PageMarketDetail });
