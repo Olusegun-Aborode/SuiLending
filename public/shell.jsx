@@ -16,6 +16,10 @@ const PAGES = [
   { id: 'liquidation', label: 'Liquidation', href: 'Liquidation.html', icon: '✖' },
   // Compare page per §6: side-by-side protocol metrics on every headline figure.
   { id: 'compare',     label: 'Compare',     href: 'Compare.html',     icon: '⇄' },
+  // Methodology page hosts the data-integrity gates panel (§3) and the
+  // data-source / metric-definition methodology. Lives in the Workspace
+  // sidebar section, not the main grid.
+  { id: 'methodology', label: 'Methodology', href: 'Methodology.html', icon: '§' },
 ];
 window.PAGES = PAGES;
 
@@ -68,19 +72,23 @@ function Sidebar({ current }) {
     {
       label: 'Lending Terminal: SUI',
       items: [
-        { ...PAGES[0], count: null },
-        { ...PAGES[1], count: String(protoCount) },
-        { ...PAGES[2], count: String(marketCount) },
-        { ...PAGES[3], count: null },
-        { ...PAGES[4], count: null },
-        { ...PAGES[5], count: null },
+        { ...PAGES[0], count: null },                            // Overview
+        { ...PAGES[1], count: String(protoCount) },              // Protocol
+        { ...PAGES[2], count: String(marketCount) },             // Rates
+        { ...PAGES[3], count: null },                            // Revenue
+        { ...PAGES[4], count: null },                            // Collateral
+        { ...PAGES[5], count: null },                            // Risk
+        { ...PAGES[6], count: null },                            // Liquidation
+        { ...PAGES[7], count: null },                            // Compare
       ],
     },
     {
       label: 'Workspace',
       items: [
-        { id: 'methodology', icon: '§', label: 'Methodology', href: '#', count: null },
-        { id: 'connectors',  icon: '⇆', label: 'Data Sources', href: '#', count: null },
+        // Methodology page hosts the Data Integrity (§3) gates panel and
+        // the data-source & metric-definition methodology — moved off the
+        // Overview page so it isn't the first thing every visitor sees.
+        { id: 'methodology', icon: '§', label: 'Methodology', href: 'Methodology.html', count: null },
       ],
     },
   ];

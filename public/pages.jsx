@@ -122,7 +122,11 @@ function PageShell({ pageId, title, terminal, headerRight, children }) {
           </div>
           {headerRight && <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>{headerRight}</div>}
         </div>
-        <Ticker items={D.ticker || []} />
+        {/* Ticker is the market-price scroll bar. Only useful as a "what's
+            the market doing right now" glance — relevant on Overview only.
+            On every other page it competes for attention with the page's
+            own KPI strip. */}
+        {pageId === 'overview' && <Ticker items={D.ticker || []} />}
         {children}
         <div style={{ height: 40 }} />
       </main>
@@ -193,6 +197,49 @@ function MiniStat({ label, value, color, sub }) {
   );
 }
 
+// Generic pagination wrapper for long row lists. Holds its own page state
+// so it survives ChartPanel re-renders. `total` is the unpaged row count,
+// `pageSize` defaults to 10, and the child gets `(start, end)` indices to
+// slice. Page number resets to 1 whenever `resetKey` changes — pass the
+// active sort key (or a string of the sort + protocol filter) so re-sorting
+// snaps back to page 1 rather than leaving the reader stranded on page 7
+// of a different order.
+function Pager({ total, pageSize = 10, resetKey, children }) {
+  const [page, setPage] = useStateP(1);
+  useEffectP(() => { setPage(1); }, [resetKey]);
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, pageCount);
+  const start = (safePage - 1) * pageSize;
+  const end = Math.min(total, start + pageSize);
+
+  return (
+    <>
+      {children({ start, end, page: safePage, pageCount })}
+      {total > pageSize && (
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '10px 4px 4px', borderTop: '1px solid var(--border-soft)',
+          fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)',
+        }}>
+          <span>Showing <span style={{ color: 'var(--fg)' }}>{start + 1}</span>–<span style={{ color: 'var(--fg)' }}>{end}</span> of {total}</span>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={safePage <= 1}
+              style={{ ...pagerBtnStyle, opacity: safePage <= 1 ? 0.35 : 1, cursor: safePage <= 1 ? 'default' : 'pointer' }}>‹ Prev</button>
+            <span style={{ minWidth: 70, textAlign: 'center', color: 'var(--fg)' }}>Page {safePage} / {pageCount}</span>
+            <button onClick={() => setPage(p => Math.min(pageCount, p + 1))} disabled={safePage >= pageCount}
+              style={{ ...pagerBtnStyle, opacity: safePage >= pageCount ? 0.35 : 1, cursor: safePage >= pageCount ? 'default' : 'pointer' }}>Next ›</button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+const pagerBtnStyle = {
+  background: 'var(--bg-soft)', border: '1px solid var(--border)',
+  color: 'var(--fg)', fontFamily: 'var(--font-mono)', fontSize: 11,
+  padding: '4px 10px', borderRadius: 4,
+};
+
 // Tiny colour-swatch legend item. Used in chart headers so a reader can
 // see what each colour means without hovering individual marks.
 function LegendChip({ color, text }) {
@@ -231,6 +278,46 @@ function ShareBars({ items, formatter = (v) => v.toFixed(0) }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// Centered donut + legend, used by both concentration panels so they read
+// as a matched pair. The donut is horizontally centered (not pinned left
+// in a 140px column), the legend stacks below as a single-row list when
+// the donut has ≤2 segments and as a 2-col grid when there are more.
+// `emptyNote` shows when the concentration is degenerate (1 segment owns
+// 100%) so the user sees the so-what without doing the maths.
+function ConcentrationDonut({ items, formatter = (v) => v.toFixed(0), emptyNote }) {
+  const total = items.reduce((s, x) => s + (x.value || 0), 0);
+  if (total <= 0) return <div style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>No data</div>;
+  const cols = items.length <= 2 ? 1 : 2;
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '6px 0 14px' }}>
+        <Donut items={items} size={160} thickness={26} />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: '4px 18px' }}>
+        {items.map(it => {
+          const pct = (it.value || 0) / total * 100;
+          return (
+            <div key={it.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '5px 0', borderBottom: '1px solid var(--border-soft)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                <span style={{ width: 9, height: 9, borderRadius: 2, background: it.color || 'var(--fg-muted)', flexShrink: 0 }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name}</span>
+              </span>
+              <span style={{ color: pct > 80 ? 'var(--red)' : pct > 50 ? 'var(--orange)' : 'var(--fg)', fontWeight: 600 }}>
+                {pct.toFixed(1)}% <span style={{ color: 'var(--fg-muted)', fontWeight: 400, marginLeft: 4 }}>({formatter(it.value)})</span>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {emptyNote && (
+        <div style={{ marginTop: 12, padding: '10px 12px', background: 'var(--accent-orange-soft)', borderRadius: 6, fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--accent-orange)', lineHeight: 1.5 }}>
+          ⚠ {emptyNote}
+        </div>
+      )}
     </div>
   );
 }
@@ -606,38 +693,40 @@ function ChartPanel({
           </div>
         </div>
         <div className="panel-body">{render({ proto, metric, size: 'normal', timeframe })}</div>
-        {insight && (() => {
+        {(insight || source) && (() => {
+          // One compact footer row instead of two stacked blocks. Insight (the
+          // decision-useful "so what" line) reads inline on the left. Source +
+          // as-of metadata collapses behind a small ⓘ on the right — verbose
+          // provenance is one hover away, never crowding the chart.
           let text = '';
-          try { text = typeof insight === 'function' ? insight({ proto, metric, timeframe }) : insight; }
-          catch (e) { console.warn('insight compute failed:', e); text = ''; }
-          if (!text) return null;
-          // Footer per §6 Insight Rules — decision-linked "so what" line.
-          return (
-            <div style={{
-              padding: '8px 16px 4px', borderTop: '1px solid var(--border-soft)',
-              fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.4,
-            }}>
-              <span style={{ color: 'var(--orange)', marginRight: 6 }}>↪</span>
-              {text}
-            </div>
-          );
-        })()}
-        {source && (() => {
-          // Source + as-of stamp footer per §6 chart rules. Pulls the global
-          // asOf block so every chart shares a single ground-truth checkpoint
-          // rather than each carrying its own pseudo-timestamp.
+          if (insight) {
+            try { text = typeof insight === 'function' ? insight({ proto, metric, timeframe }) : insight; }
+            catch (e) { console.warn('insight compute failed:', e); text = ''; }
+          }
           const asOf = D.asOf;
           const cp = asOf?.checkpoint != null ? `#${asOf.checkpoint.toLocaleString()}` : '—';
           const ts = asOf?.checkpointTimestamp ? new Date(asOf.checkpointTimestamp).toISOString().replace('T', ' ').slice(0, 19) + ' UTC' : '—';
+          if (!text && !source) return null;
           return (
             <div style={{
-              padding: insight ? '2px 16px 10px' : '8px 16px 10px',
-              borderTop: insight ? 'none' : '1px solid var(--border-soft)',
-              fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--fg-dim)', lineHeight: 1.4,
-              display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'space-between',
+              padding: '6px 16px 8px', borderTop: '1px solid var(--border-soft)',
+              fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.4,
+              display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between',
             }}>
-              <span><span style={{ color: 'var(--fg-muted)' }}>source:</span> {source}</span>
-              <span><span style={{ color: 'var(--fg-muted)' }}>as of:</span> checkpoint {cp} · {ts}</span>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                {text && (
+                  <>
+                    <span style={{ color: 'var(--orange)', marginRight: 6 }}>↪</span>
+                    {text}
+                  </>
+                )}
+              </span>
+              {source && (
+                <InfoTip size={11} style={{ marginLeft: 0, opacity: 0.7 }}>
+                  <div style={{ marginBottom: 4 }}><strong>Source:</strong> {source}</div>
+                  <div><strong>As of:</strong> checkpoint {cp} · {ts}</div>
+                </InfoTip>
+              )}
             </div>
           );
         })()}
@@ -678,9 +767,12 @@ function PageOverview() {
 
   return (
     <PageShell pageId="overview" title="Lending Terminal: SUI — Overview" terminal="lending-terminal-sui-overview">
-      {/* §3 integrity gates — collapsible status row showing the worst-of:
-          green / amber / red. A red gate blocks publication per the standard. */}
-      <IntegrityPanel />
+      {/* Data Integrity + Methodology moved to their own page (sidebar
+          → Workspace → Methodology). Overview now leads with the headline
+          KPIs and the chart grid — no audit chrome before the user sees
+          a single number. The header still carries the worst-of integrity
+          status as a DataQualityBadge so degraded data is impossible to
+          miss without opening the methodology page. */}
       <KpiStrip items={[
         { id: 'tvl',    label: 'Total Value Locked', value: fmtUSD(totalTvl * 1e6, 1), change: 4.82, spark: D.kpiSparks.tvl.slice(-30) },
         { id: 'supply', label: 'Total Supplied',     value: fmtUSD(totalSupply * 1e6, 1), change: 5.10, spark: D.kpiSparks.supply.slice(-30) },
@@ -844,9 +936,35 @@ function PageOverview() {
         />
       </div>
 
-      {/* Methodology — surfaced at the bottom of Overview so the data-source
-          and TVL-definition disclosures (including where we rely on DefiLlama)
-          are visible to every user, not buried behind a dead nav link. */}
+    </PageShell>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// PAGE 0 — Methodology & Data Sources
+// ════════════════════════════════════════════════════════════════
+//
+// Hosts the two audit / methodology surfaces that used to live on the
+// Overview page:
+//   • IntegrityPanel  — the §3 publication gates (conservation, bounds,
+//                       aggregation, reconciliation, freshness, provenance,
+//                       stale-collateral, outlier-row sanity). Each gate
+//                       returns pass / warn / fail with a one-line detail.
+//   • MethodologyPanel — data-source map, refresh cadence, TVL formula per
+//                       protocol, known coverage gaps.
+//
+// Reachable from the sidebar → Workspace → Methodology. Surfaced as its own
+// page so first-time visitors land on the actual lending data, not the
+// audit chrome, but the methodology is still one click away and the
+// header DataQualityBadge nudges them here when something is off.
+function PageMethodology() {
+  return (
+    <PageShell pageId="methodology"
+      title="Methodology & Data Integrity"
+      terminal="lending-terminal-sui-methodology">
+      <div style={{ marginTop: 16 }}>
+        <IntegrityPanel />
+      </div>
       <div style={{ marginTop: 16 }}>
         <MethodologyPanel />
       </div>
@@ -1088,43 +1206,50 @@ function PageRates() {
             const rows = D.pools
               .filter(r => matchProto(r, proto))
               .sort((a, b) => b[metric] - a[metric]);
-            const maxRows = size === 'expanded' ? rows.length : Math.min(rows.length, 12);
+            // Paginate to 10 rows per page so the table doesn't run for two
+            // screens. Sort key is folded into resetKey so changing the sort
+            // snaps back to page 1.
+            const pageSize = size === 'expanded' ? 25 : 10;
             return (
-              <div style={{ overflowX: 'auto', maxHeight: size === 'expanded' ? '70vh' : 480, overflowY: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
-                  <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)' }}>
-                    <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--fg-muted)', textAlign: 'left' }}>
-                      <th style={{ padding: 8 }}>Asset</th>
-                      <th style={{ padding: 8 }}>Protocol</th>
-                      <th style={{ padding: 8 }}>Supply APY</th>
-                      <th style={{ padding: 8 }}>Borrow APY</th>
-                      <th style={{ padding: 8 }}>Spread</th>
-                      <th style={{ padding: 8 }}>Util</th>
-                      <th style={{ padding: 8 }}>Kink</th>
-                      <th style={{ padding: 8 }}>Reserve</th>
-                      <th style={{ padding: 8 }}>30d</th>
-                      <th style={{ padding: 8 }}></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.slice(0, maxRows).map((m, i) => (
-                      <tr key={i} className="row-clickable" onClick={() => goToMarket(m.protocol, m.sym)}
-                          style={{ borderBottom: '1px solid var(--border-soft)', cursor: 'pointer' }}>
-                        <td style={{ padding: 8, color: 'var(--fg)' }}>{m.sym}</td>
-                        <td style={{ padding: 8 }}><ProtocolChip id={m.protocol} /></td>
-                        <td style={{ padding: 8, color: 'var(--green)' }}>{m.supplyApy.toFixed(2)}%</td>
-                        <td style={{ padding: 8, color: 'var(--red)' }}>{m.borrowApy.toFixed(2)}%</td>
-                        <td style={{ padding: 8 }}>{(m.borrowApy - m.supplyApy).toFixed(2)}%</td>
-                        <td style={{ padding: 8 }}>{m.util.toFixed(1)}%</td>
-                        <td style={{ padding: 8 }}>{m.irmKink}%</td>
-                        <td style={{ padding: 8 }}>{m.reserveFactor}%</td>
-                        <td style={{ padding: 8 }}><Sparkline values={m.spark} color="var(--blue)" width={80} height={20} /></td>
-                        <td style={{ padding: 8, color: 'var(--fg-muted)' }}>›</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <Pager total={rows.length} pageSize={pageSize} resetKey={`${proto}|${metric}`}>
+                {({ start, end }) => (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--fg-muted)', textAlign: 'left' }}>
+                          <th style={{ padding: 8 }}>Asset</th>
+                          <th style={{ padding: 8 }}>Protocol</th>
+                          <th style={{ padding: 8 }}>Supply APY</th>
+                          <th style={{ padding: 8 }}>Borrow APY</th>
+                          <th style={{ padding: 8 }}>Spread</th>
+                          <th style={{ padding: 8 }}>Util</th>
+                          <th style={{ padding: 8 }}>Kink</th>
+                          <th style={{ padding: 8 }}>Reserve</th>
+                          <th style={{ padding: 8 }}>30d</th>
+                          <th style={{ padding: 8 }}></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.slice(start, end).map((m, i) => (
+                          <tr key={start + i} className="row-clickable" onClick={() => goToMarket(m.protocol, m.sym)}
+                              style={{ borderBottom: '1px solid var(--border-soft)', cursor: 'pointer' }}>
+                            <td style={{ padding: 8, color: 'var(--fg)' }}>{m.sym}</td>
+                            <td style={{ padding: 8 }}><ProtocolChip id={m.protocol} /></td>
+                            <td style={{ padding: 8, color: 'var(--green)' }}>{m.supplyApy.toFixed(2)}%</td>
+                            <td style={{ padding: 8, color: 'var(--red)' }}>{m.borrowApy.toFixed(2)}%</td>
+                            <td style={{ padding: 8 }}>{(m.borrowApy - m.supplyApy).toFixed(2)}%</td>
+                            <td style={{ padding: 8 }}>{m.util.toFixed(1)}%</td>
+                            <td style={{ padding: 8 }}>{m.irmKink}%</td>
+                            <td style={{ padding: 8 }}>{m.reserveFactor}%</td>
+                            <td style={{ padding: 8 }}><Sparkline values={m.spark} color="var(--blue)" width={80} height={20} /></td>
+                            <td style={{ padding: 8, color: 'var(--fg-muted)' }}>›</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Pager>
             );
           }}
         />
@@ -1132,7 +1257,9 @@ function PageRates() {
 
       <div style={{ marginTop: 16 }}>
         <ChartPanel
-          title="CDP-Archetype Rates (Bucket)"
+          title="Bucket vaults — collateral, debt, fees"
+          caption="every CDP vault on Bucket Protocol"
+          description="Bucket runs a single-asset-mint CDP: deposit collateral, mint USDB (or BUCK on V1). Min CR is the minimum collateral ratio before a vault is redemption-eligible. Redemption fee is paid by the redeemer when they swap USDB for collateral. PSM fee is the spread on direct stablecoin-to-USDB swaps."
           protocolMode="none"
           metricItems={[
             { id: 'collateralUsd', label: 'Sort: Collateral' },
@@ -1142,38 +1269,43 @@ function PageRates() {
           defaultMetric="collateralUsd"
           render={({ metric, size }) => {
             const rows = [...D.vaults].sort((a, b) => b[metric] - a[metric]);
+            const pageSize = size === 'expanded' ? 25 : 10;
             return (
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
-                  <thead>
-                    <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--fg-muted)', textAlign: 'left' }}>
-                      <th style={{ padding: 8 }}>Collateral</th>
-                      <th style={{ padding: 8 }}>Locked</th>
-                      <th style={{ padding: 8 }}>USDB Debt</th>
-                      <th style={{ padding: 8 }}>Interest Rate</th>
-                      <th style={{ padding: 8 }}>Redemption Fee</th>
-                      <th style={{ padding: 8 }}>PSM Fee</th>
-                      <th style={{ padding: 8 }}>Min CR</th>
-                      <th style={{ padding: 8 }}></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((m, i) => (
-                      <tr key={i} className="row-clickable" onClick={() => goToMarket('bucket', m.sym)}
-                          style={{ borderBottom: '1px solid var(--border-soft)', cursor: 'pointer' }}>
-                        <td style={{ padding: 8, color: 'var(--fg)' }}>{m.sym}</td>
-                        <td style={{ padding: 8 }}>{fmtUSD(m.collateralUsd * 1e6, 1)}</td>
-                        <td style={{ padding: 8 }}>{fmtUSD(m.debtUsd * 1e6, 1)}</td>
-                        <td style={{ padding: 8, color: 'var(--red)' }}>{m.interestRate.toFixed(2)}%</td>
-                        <td style={{ padding: 8 }}>{m.redemptionFee.toFixed(2)}%</td>
-                        <td style={{ padding: 8 }}>{m.psmFee.toFixed(2)}%</td>
-                        <td style={{ padding: 8 }}>{m.minCR}%</td>
-                        <td style={{ padding: 8, color: 'var(--fg-muted)' }}>›</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <Pager total={rows.length} pageSize={pageSize} resetKey={metric}>
+                {({ start, end }) => (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--fg-muted)', textAlign: 'left' }}>
+                          <th style={{ padding: 8 }}>Collateral</th>
+                          <th style={{ padding: 8 }}>Locked</th>
+                          <th style={{ padding: 8 }}>USDB Debt</th>
+                          <th style={{ padding: 8 }}>Interest Rate</th>
+                          <th style={{ padding: 8 }}>Redemption Fee</th>
+                          <th style={{ padding: 8 }}>PSM Fee</th>
+                          <th style={{ padding: 8 }}>Min CR</th>
+                          <th style={{ padding: 8 }}></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.slice(start, end).map((m, i) => (
+                          <tr key={start + i} className="row-clickable" onClick={() => goToMarket('bucket', m.sym)}
+                              style={{ borderBottom: '1px solid var(--border-soft)', cursor: 'pointer' }}>
+                            <td style={{ padding: 8, color: 'var(--fg)' }}>{m.sym}</td>
+                            <td style={{ padding: 8 }}>{fmtUSD(m.collateralUsd * 1e6, 1)}</td>
+                            <td style={{ padding: 8 }}>{fmtUSD(m.debtUsd * 1e6, 1)}</td>
+                            <td style={{ padding: 8, color: 'var(--red)' }}>{m.interestRate.toFixed(2)}%</td>
+                            <td style={{ padding: 8 }}>{m.redemptionFee.toFixed(2)}%</td>
+                            <td style={{ padding: 8 }}>{m.psmFee.toFixed(2)}%</td>
+                            <td style={{ padding: 8 }}>{m.minCR}%</td>
+                            <td style={{ padding: 8, color: 'var(--fg-muted)' }}>›</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Pager>
             );
           }}
         />
@@ -1430,35 +1562,41 @@ function PageCollateral() {
         { id: 'stab', label: 'Stable Debt Share', value: `${stableBorrowShare.toFixed(1)}%`, change: 0, subLabel: 'stables ÷ all borrows' },
       ]} />
 
-      {/* Concentration panels per §4 Tier 3. Asset uses a horizontal share
-          bar (top 5 + the long tail), Oracle uses a donut. Formulas /
-          methodology live in tooltips so the panel surface stays clean. */}
+      {/* Concentration panels per §4 Tier 3. Both use a donut now so they
+          read as a matched pair. Plain-English labels replace the previous
+          "Top 1 / Top 3 / Top 5 / Unique" jargon — those numbers go in
+          MiniStats on each side. */}
       <div className="grid grid-12" style={{ marginTop: 16 }}>
         <div className="panel col-6">
           <div className="panel-header">
             <span className="panel-title">
               <span className="bullet">●</span> Asset concentration
               <InfoTip>
-                HHI = Σ(share%)² across collateral assets. Bands per the §4 standard:
-                {' '}&gt;2500 highly concentrated, 1500–2500 moderate, ≤1500 diffuse.
-                {' '}Top-1 share is shown alongside as a quicker single-point read.
+                How crowded the sector's collateral is on a handful of assets.
+                {' '}If one asset crashes, lenders backing that asset eat
+                {' '}most of the loss. HHI = Σ(share%)² across assets — &gt;2500 highly
+                {' '}concentrated, 1500–2500 moderate, ≤1500 diffuse.
               </InfoTip>
             </span>
             <ConcentrationChip hhi={supplyHhi} />
           </div>
           <div className="panel-body">
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
-              <MiniStat label="Top 1" value={`${top1Share.toFixed(1)}%`} color={top1Share > 50 ? 'var(--red)' : top1Share > 30 ? 'var(--orange)' : 'var(--fg)'} />
-              <MiniStat label="Top 3" value={`${top3Share.toFixed(1)}%`} />
-              <MiniStat label="Top 5" value={`${top5Share.toFixed(1)}%`} />
-              <MiniStat label="Unique" value={String(allAssetRows.length)} />
+            {/* Re-labelled MiniStats — plain English. Old labels were
+                "Top 1 / Top 3 / Top 5 / Unique" which is jargon. */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 18 }}>
+              <MiniStat label="Largest asset"  value={`${top1Share.toFixed(1)}%`}
+                color={top1Share > 50 ? 'var(--red)' : top1Share > 30 ? 'var(--orange)' : 'var(--fg)'}
+                sub={allAssetRows[0]?.sym || '—'} />
+              <MiniStat label="Top 3 combined" value={`${top3Share.toFixed(1)}%`} sub="of collateral" />
+              <MiniStat label="Top 5 combined" value={`${top5Share.toFixed(1)}%`} sub="of collateral" />
+              <MiniStat label="Number of assets" value={String(allAssetRows.length)} sub="indexed" />
             </div>
-            {/* Top-5 horizontal share bars + collapsed "Other" — actually visual */}
-            <ShareBars
+            {/* Donut: top 8 assets + a single "Other" wedge for the long tail */}
+            <ConcentrationDonut
               items={[
-                ...allAssetRows.slice(0, 5).map(r => ({ label: r.sym, value: r.value, color: colorFor(r.sym) })),
-                allAssetRows.length > 5
-                  ? { label: `Other (${allAssetRows.length - 5})`, value: allAssetRows.slice(5).reduce((s, r) => s + r.value, 0), color: 'var(--fg-muted)' }
+                ...allAssetRows.slice(0, 8).map(r => ({ name: r.sym, value: r.value, color: colorFor(r.sym) })),
+                allAssetRows.length > 8
+                  ? { name: `Other (${allAssetRows.length - 8})`, value: allAssetRows.slice(8).reduce((s, r) => s + r.value, 0), color: 'var(--fg-muted)' }
                   : null,
               ].filter(Boolean)}
               formatter={(v) => fmtUSD(v * 1e6, 1)}
@@ -1471,10 +1609,10 @@ function PageCollateral() {
             <span className="panel-title">
               <span className="bullet">●</span> Oracle concentration
               <InfoTip>
-                Distribution of indexed pools by price-oracle provider. A single
-                oracle dominating the lending sector is a shared liveness / manipulation risk
-                — if it stalls, every protocol on that feed mis-prices at the same moment.
-                HHI uses the same bands as asset concentration.
+                Which price oracles back the sector's collateral. A single oracle
+                {' '}dominating means if it stalls or quotes a bad price, every
+                {' '}protocol on that feed mis-prices at the same moment.
+                {' '}HHI uses the same bands as asset concentration.
               </InfoTip>
             </span>
             <ConcentrationChip hhi={oracleHhi} />
@@ -1484,24 +1622,13 @@ function PageCollateral() {
               <div style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>No oracle data indexed.</div>
             )}
             {oracleRows.length > 0 && (
-              <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: 18, alignItems: 'center' }}>
-                <Donut
-                  items={oracleRows.map(r => ({ name: r.name, value: r.count, color: ORACLE_COLOR[r.name] ?? 'var(--fg-muted)' }))}
-                  size={140} thickness={22} />
-                <div>
-                  {oracleRows.map(r => (
-                    <div key={r.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '6px 0', borderBottom: '1px solid var(--border-soft)', fontFamily: 'var(--font-mono)' }}>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-                        <span style={{ width: 9, height: 9, borderRadius: 2, background: ORACLE_COLOR[r.name] ?? 'var(--fg-muted)' }} />
-                        {r.name}
-                      </span>
-                      <span style={{ fontSize: 13, color: r.share > 80 ? 'var(--red)' : r.share > 50 ? 'var(--orange)' : 'var(--fg)' }}>
-                        {r.share.toFixed(1)}% <span style={{ color: 'var(--fg-muted)', fontSize: 11 }}>({r.count})</span>
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              <ConcentrationDonut
+                items={oracleRows.map(r => ({ name: r.name, value: r.count, color: ORACLE_COLOR[r.name] ?? 'var(--fg-muted)' }))}
+                formatter={(v) => `${v} ${v === 1 ? 'pool' : 'pools'}`}
+                emptyNote={oracleRows.length === 1
+                  ? `Every Sui lending market currently prices via ${oracleRows[0].name}. That's a shared single point of failure — when this feed stalls, every protocol on this dashboard does too.`
+                  : null}
+              />
             )}
           </div>
         </div>
@@ -1707,22 +1834,23 @@ function PageRisk() {
 
   // HHI for asset concentration: Σ(share%)² across asset symbols by supply.
   // Per the standard: >2500 = highly concentrated.
-  // Asset concentration on the Risk page uses the same vault-unwrap +
-  // case-fold normalization as PageCollateral so the HHI here matches what
-  // the Collateral page shows. Without this the Risk HHI drifts higher
-  // because adapter labels (BKT-SAVE-…) get treated as separate assets.
-  const supplyByAsset = allRows.reduce((acc, r) => {
+  // Risk-page concentration is DEBT-side, not supply-side. The Collateral
+  // page already shows supply concentration ("what backs the sector"); on
+  // Risk we want "what's actually borrowed against" — which assets carry
+  // the most live debt and would dominate losses in a stress event. Same
+  // normalize() and HHI math; different aggregation column.
+  const borrowByAsset = allRows.reduce((acc, r) => {
     const sym = normalizeAssetSymbol(r.sym || r.asset || '?');
-    const sup = r.supply || r.collateralUsd || 0;
-    acc[sym] = (acc[sym] || 0) + sup;
+    const bor = r.borrow || r.debtUsd || 0;
+    if (bor > 0) acc[sym] = (acc[sym] || 0) + bor;
     return acc;
   }, {});
-  const totSupply = Object.values(supplyByAsset).reduce((s, v) => s + v, 0);
-  const hhi = Object.values(supplyByAsset).reduce((s, v) => {
-    const share = totSupply > 0 ? (v / totSupply * 100) : 0;
+  const totBorrow = Object.values(borrowByAsset).reduce((s, v) => s + v, 0);
+  const debtHhi = Object.values(borrowByAsset).reduce((s, v) => {
+    const share = totBorrow > 0 ? (v / totBorrow * 100) : 0;
     return s + share * share;
   }, 0);
-  const hhiBand = concentrationBand(hhi);
+  const debtHhiBand = concentrationBand(debtHhi);
 
   // Largest liquidation events (top 10 by debt repaid).
   const largestEvents = [...liq30d]
@@ -1735,7 +1863,7 @@ function PageRisk() {
         { id: 'lqi', label: 'Liq. intensity (30D)', value: `${liqIntensity.toFixed(2)}%`, change: 0, subLabel: 'debt liquidated ÷ TVL' },
         { id: 'lqe', label: 'Liq. efficiency',      value: liqEfficiency > 0 ? `${liqEfficiency.toFixed(2)}×` : '—', change: 0, subLabel: 'collateral seized ÷ debt repaid' },
         { id: 'dsi', label: 'Days since incident',  value: daysSinceLastIncident != null ? `${daysSinceLastIncident}d` : '—', change: 0, subLabel: 'last liquidation event' },
-        { id: 'hhi', label: 'Asset HHI',            value: hhi.toFixed(0), change: 0, subLabel: hhiBand.label },
+        { id: 'hhi', label: 'Debt-side HHI',        value: debtHhi.toFixed(0), change: 0, subLabel: debtHhiBand.label, note: 'Concentration of live borrows by asset. Supply-side HHI is on the Collateral page.' },
       ]} />
 
       {/* HF distribution — uses the SDK's HealthFactorHistogram which bakes
@@ -1789,47 +1917,69 @@ function PageRisk() {
         />
       </div>
 
-      {/* Collateral-at-risk at price shocks — top row is a visual share bar
-          for each shock so the "% of TVL" reads at a glance. Methodology
-          tucked into a single tooltip. */}
+      {/* Collateral-at-risk under price shocks. Narrative-first layout: one
+          card per shock with a plain-English sentence ("If collateral prices
+          fall 10%…") followed by ONE headline number (at-risk debt as % of
+          total debt — the operational risk reading), with a small secondary
+          row for affected market count + dollar figures. Drops the "% of TVL"
+          framing which conflated supply-side TVL with debt-side risk. */}
       <div style={{ marginTop: 16 }}>
         <div className="panel">
           <div className="panel-header">
             <span className="panel-title">
               <span className="bullet">●</span> What if collateral prices fall?
               <InfoTip>
-                Deterministic shock test. For each market we scale Health Factor by (1 − shock); markets
-                whose HF drops below 1 would be liquidatable. We sum their borrows and collateral and
-                divide by total TVL. The proper version uses Monte Carlo on per-position HF (see Modeled
-                Risk below) — this is a single-shot baseline.
+                Single-shot shock test. We scale every market's Health Factor
+                by (1 − shock) and count the markets that would drop below
+                HF = 1 (liquidatable). The headline number is "at-risk debt"
+                — the borrows in those markets — expressed as a share of
+                total sector debt. Treats every market as one position; the
+                proper per-position version is the Monte Carlo run below.
               </InfoTip>
-            </span>
-            <span style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
-              total TVL: {fmtUSD(totalTvl * 1e6, 1)}
             </span>
           </div>
           <div className="panel-body">
             {car.map((c, i) => {
-              const pctTvl = totalTvl > 0 ? (c.collateral / totalTvl * 100) : 0;
-              const color = pctTvl > 20 ? 'var(--red)' : pctTvl > 5 ? 'var(--orange)' : 'var(--green)';
+              const debtShare = totalBorrow > 0 ? (c.debt / totalBorrow * 100) : 0;
+              const color = debtShare > 40 ? 'var(--red)' : debtShare > 15 ? 'var(--orange)' : 'var(--green)';
+              const verdict = debtShare > 40 ? 'SEVERE' : debtShare > 15 ? 'ELEVATED' : 'CONTAINED';
               return (
-                <div key={i} style={{ display: 'grid', gridTemplateColumns: '90px 1fr 220px', gap: 16, alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--border-soft)' }}>
-                  <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 15, color: 'var(--fg)' }}>−{c.shockPct}%</div>
+                <div key={i} style={{
+                  padding: '14px 16px', marginBottom: 10, borderRadius: 8,
+                  border: `1px solid ${color}`, background: 'var(--bg-soft)',
+                  display: 'grid', gridTemplateColumns: '1fr auto', gap: 16, alignItems: 'center',
+                }}>
                   <div>
-                    <div style={{ height: 10, background: 'var(--bg-soft)', borderRadius: 5, overflow: 'hidden' }}>
-                      <div style={{ width: `${Math.min(100, Math.max(2, pctTvl))}%`, height: '100%', background: color, transition: 'width 200ms' }} />
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-muted)', marginBottom: 4 }}>
+                      If collateral prices fall <span style={{ color: 'var(--fg)', fontWeight: 600 }}>{c.shockPct}%</span>…
                     </div>
-                    <div style={{ marginTop: 4, display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)' }}>
-                      <span>{c.count} {c.count === 1 ? 'market' : 'markets'} at risk</span>
-                      <span style={{ color }}>{pctTvl.toFixed(2)}% of TVL</span>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 26, fontWeight: 600, color }}>
+                        {fmtUSD(c.debt * 1e6, 1)}
+                      </span>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--fg-muted)' }}>
+                        of debt becomes liquidatable
+                        <span style={{ color, marginLeft: 6, fontWeight: 600 }}>({debtShare.toFixed(1)}% of all borrows)</span>
+                      </span>
+                    </div>
+                    <div style={{ marginTop: 6, fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)' }}>
+                      Across <span style={{ color: 'var(--fg)' }}>{c.count}</span> {c.count === 1 ? 'market' : 'markets'} ·
+                      {' '}collateral backing them: <span style={{ color: 'var(--fg)' }}>{fmtUSD(c.collateral * 1e6, 1)}</span>
                     </div>
                   </div>
-                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-muted)', textAlign: 'right' }}>
-                    debt {fmtUSD(c.debt * 1e6, 1)} · collateral {fmtUSD(c.collateral * 1e6, 1)}
+                  <div style={{
+                    padding: '4px 12px', borderRadius: 12, background: color, color: 'white',
+                    fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600,
+                    letterSpacing: 0.6, textTransform: 'uppercase',
+                  }}>
+                    {verdict}
                   </div>
                 </div>
               );
             })}
+            <div style={{ marginTop: 4, fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)' }}>
+              Total sector debt: <span style={{ color: 'var(--fg)' }}>{fmtUSD(totalBorrow * 1e6, 1)}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -1915,26 +2065,36 @@ function PageRisk() {
         </div>
       </div>
 
-      {/* Asset concentration — the band chip lives in the header, no inline
-          formula clutter. Methodology is in the tooltip. */}
+      {/* Debt-side concentration — what's actually borrowed against. Distinct
+          from the Collateral page's supply-side view: there we measure what
+          backs the sector, here we measure what's exposed. A few large
+          borrow positions in one asset is the riskier shape. */}
       <div style={{ marginTop: 16 }}>
         <div className="panel">
           <div className="panel-header">
             <span className="panel-title">
-              <span className="bullet">●</span> Asset concentration
+              <span className="bullet">●</span> Debt-side concentration
               <InfoTip>
-                HHI = Σ(share%)² across collateral assets. Bands per the §4 standard:
-                {' '}&gt;2500 highly concentrated, 1500–2500 moderate, ≤1500 diffuse.
-                {' '}Same normalization as the Collateral page so the number matches.
+                Which assets carry the most live borrows. Distinct from the
+                {' '}Collateral page's "Asset concentration", which measures what
+                {' '}<em>backs</em> the sector. This view shows what's actually
+                {' '}<em>exposed</em> — if these assets blow up, losses concentrate here.
+                {' '}HHI bands: &gt;2500 highly concentrated, 1500–2500 moderate, ≤1500 diffuse.
               </InfoTip>
             </span>
-            <ConcentrationChip hhi={hhi} />
+            <ConcentrationChip hhi={debtHhi} />
           </div>
           <div className="panel-body">
-            <Leaderboard items={Object.entries(supplyByAsset)
-              .map(([sym, v]) => ({ name: sym, value: v * 1e6 }))
-              .sort((a, b) => b.value - a.value)
-              .slice(0, 12)} format={fmtUSD} />
+            {totBorrow > 0 ? (
+              <Leaderboard items={Object.entries(borrowByAsset)
+                .map(([sym, v]) => ({ name: sym, value: v * 1e6 }))
+                .sort((a, b) => b.value - a.value)
+                .slice(0, 12)} format={fmtUSD} />
+            ) : (
+              <div style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 12, padding: '12px 0' }}>
+                No active borrows in the sector.
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -2019,73 +2179,83 @@ function ModeledRiskPanel({ rm }) {
           </span>
         </div>
         <div className="panel-body">
-          {/* ── Top row: Stress gauge + key stat tiles ────────────── */}
-          <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: 24, alignItems: 'center', marginBottom: 18 }}>
-            <div style={{ textAlign: 'center' }}>
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', marginBottom: 4 }}>
-                Probability of &gt;1% TVL liquidated
-              </div>
-              <Gauge value={mc.probOnePctLiquidated} bands={[0.05, 0.20]} width={240} height={130} />
-              <div style={{ marginTop: 4, fontFamily: 'var(--font-mono)', fontSize: 12, color: riskColor, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.6 }}>
-                {riskLabel}
-              </div>
+          {/* ── Section 1: The headline stress gauge ────────────────────
+             Gauge gets its own wide block at the top, properly spaced so
+             the title sits clearly above the dial, the % reading owns the
+             center, and the verdict label has room below. */}
+          <div style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center',
+            padding: '8px 0 24px', borderBottom: '1px solid var(--border-soft)', marginBottom: 24,
+          }}>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 10 }}>
+              Probability of &gt;1% TVL liquidated over 7 days
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-              <MiniStat label="Worst-case 7D loss (95%)" value={pct(mc.laR95)}
-                sub="of sector TVL" />
-              <MiniStat label="Worst-case 7D loss (99%)" value={pct(mc.laR99)}
-                sub="tail scenario" />
-              <MiniStat label="Time to first liquidation" value={mc.expectedTimingDays != null ? `${mc.expectedTimingDays.toFixed(1)} d` : '—'}
-                sub="conditional mean" />
-              <MiniStat label="Sector volatility (realised)" value={pct(hist.annualizedVol || 0)}
-                sub={`${hist.observations}D window`} />
-              <MiniStat label="Best 1D return" value={pct(hist.maxReturn || 0)}
-                color="var(--green)" sub="recent history" />
-              <MiniStat label="Worst 1D return" value={pct(hist.minReturn || 0)}
-                color="var(--red)" sub="recent history" />
+            <Gauge value={mc.probOnePctLiquidated} bands={[0.05, 0.20]} width={300} height={170} />
+            <div style={{
+              marginTop: 10, padding: '4px 14px', borderRadius: 14,
+              background: riskColor, color: 'white',
+              fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600,
+              textTransform: 'uppercase', letterSpacing: 0.8,
+            }}>
+              {riskLabel} risk
             </div>
           </div>
 
-          {/* ── Middle row: VaR + ES as paired horizontal bars ───── */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 18 }}>
-            <div>
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>
-                Value at Risk (1-day)
-                <InfoTip>
-                  VaR = the daily loss the sector is unlikely to exceed at the chosen
-                  confidence. 95% VaR of 2% means "on a normal-bad day TVL drops at most
-                  2%". Historical uses the empirical return distribution. Heavy-tail uses
-                  Student-t df=4 to penalise extreme moves more — useful when recent
-                  history hasn't yet seen the tail.
-                </InfoTip>
-              </div>
-              <PairedBars rows={varRows}
-                aLabel="Historical" bLabel="Heavy-tail (Student-t)"
-                aColor="var(--blue)" bColor="var(--orange)"
-                width={420}
-                formatter={(v) => pctNoSign(v)} />
-            </div>
-            <div>
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>
-                Expected Shortfall (1-day)
-                <InfoTip>
-                  Expected Shortfall (CVaR) is the average loss <em>given</em> we exceed VaR
-                  — what happens "when things actually go bad". Always ≥ VaR. A big gap
-                  between VaR and ES means the tail is thick: when losses arrive they tend
-                  to be much worse than the threshold.
-                </InfoTip>
-              </div>
-              <PairedBars rows={esRows}
-                aLabel="Historical" bLabel="Heavy-tail (Student-t)"
-                aColor="var(--blue)" bColor="var(--orange)"
-                width={420}
-                formatter={(v) => pctNoSign(v)} />
-            </div>
+          {/* ── Section 2: Six stat tiles in 2 rows of 3 ──────────────── */}
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 10 }}>
+            Tail scenarios + recent history
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 28 }}>
+            <MiniStat label="Worst-case 7D loss (95%)" value={pct(mc.laR95)} sub="of sector TVL" />
+            <MiniStat label="Worst-case 7D loss (99%)" value={pct(mc.laR99)} sub="tail scenario" />
+            <MiniStat label="Time to first liquidation" value={mc.expectedTimingDays != null ? `${mc.expectedTimingDays.toFixed(1)} d` : '—'} sub="conditional mean" />
+            <MiniStat label="Sector volatility (realised)" value={pct(hist.annualizedVol || 0)} sub={`${hist.observations}D window`} />
+            <MiniStat label="Best 1D return"  value={pct(hist.maxReturn || 0)} color="var(--green)" sub="recent history" />
+            <MiniStat label="Worst 1D return" value={pct(hist.minReturn || 0)} color="var(--red)"   sub="recent history" />
           </div>
 
-          {/* ── Bottom row: Backtest verdict chips ─────────────── */}
+          {/* ── Section 3: VaR + ES, stacked vertically with full width.
+                A 2-col layout cramped the bar labels at 95% / 99%. Stacked
+                each gets the panel's full width so percentages don't crash
+                into the bar. ───────────────────────────────────────── */}
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 10 }}>
+              Value at Risk (1-day)
+              <InfoTip>
+                VaR = the daily loss the sector is unlikely to exceed at the chosen
+                confidence. 95% VaR of 2% means "on a normal-bad day TVL drops at most
+                2%". Historical uses the empirical return distribution. Heavy-tail uses
+                Student-t df=4 to penalise extreme moves more — useful when recent
+                history hasn't yet seen the tail.
+              </InfoTip>
+            </div>
+            <PairedBars rows={varRows}
+              aLabel="Historical" bLabel="Heavy-tail (Student-t)"
+              aColor="var(--blue)" bColor="var(--orange)"
+              width={780}
+              formatter={(v) => pctNoSign(v)} />
+          </div>
+
+          <div style={{ marginBottom: 28 }}>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 10 }}>
+              Expected Shortfall (1-day)
+              <InfoTip>
+                Expected Shortfall (CVaR) is the average loss <em>given</em> we exceed VaR
+                — what happens "when things actually go bad". Always ≥ VaR. A big gap
+                between VaR and ES means the tail is thick: when losses arrive they tend
+                to be much worse than the threshold.
+              </InfoTip>
+            </div>
+            <PairedBars rows={esRows}
+              aLabel="Historical" bLabel="Heavy-tail (Student-t)"
+              aColor="var(--blue)" bColor="var(--orange)"
+              width={780}
+              formatter={(v) => pctNoSign(v)} />
+          </div>
+
+          {/* ── Section 4: Backtest verdict cards ─────────────── */}
           <div>
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 10 }}>
               Backtest
               <InfoTip>
                 Out-of-sample check on the VaR model. We estimate VaR on the first half of
@@ -2094,17 +2264,17 @@ function ModeledRiskPanel({ rm }) {
                 VaR about 1%. Anything 0.5×–2× of expected is "in band" for our short window.
               </InfoTip>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
               {[bt95, bt99].filter(Boolean).map((b) => {
                 const band = btBand(b);
                 return (
-                  <div key={b.level} style={{ padding: '10px 14px', border: `1px solid ${band.color}`, borderRadius: 6, display: 'grid', gridTemplateColumns: '90px 1fr auto', gap: 14, alignItems: 'center' }}>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 14 }}>{pct(b.level)}</div>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-muted)' }}>
-                      <div>{b.actualViolations} of {b.observations} days breached <span style={{ color: 'var(--fg-dim)' }}>(expected ≈ {b.expectedViolations.toFixed(1)})</span></div>
-                      <div>actual {pct(b.violationRate)} <span style={{ color: 'var(--fg-dim)' }}>vs expected {pct(b.expectedRate)}</span></div>
+                  <div key={b.level} style={{ padding: '14px 16px', border: `1px solid ${band.color}`, borderRadius: 8, display: 'grid', gridTemplateColumns: '76px 1fr auto', gap: 14, alignItems: 'center' }}>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 18, color: 'var(--fg)' }}>{pct(b.level)}</div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+                      <div><span style={{ color: 'var(--fg)', fontWeight: 600 }}>{b.actualViolations}</span> of {b.observations} days breached <span style={{ color: 'var(--fg-dim)' }}>(expected ≈ {b.expectedViolations.toFixed(1)})</span></div>
+                      <div>actual <span style={{ color: 'var(--fg)' }}>{pct(b.violationRate)}</span> vs expected <span style={{ color: 'var(--fg-dim)' }}>{pct(b.expectedRate)}</span></div>
                     </div>
-                    <div style={{ padding: '4px 10px', borderRadius: 10, background: band.color, color: 'white', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                    <div style={{ padding: '5px 12px', borderRadius: 12, background: band.color, color: 'white', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, whiteSpace: 'nowrap' }}>
                       {band.label}
                     </div>
                   </div>
@@ -2114,7 +2284,7 @@ function ModeledRiskPanel({ rm }) {
           </div>
 
           {/* Limitations — collapsed by default. Curious readers can open. */}
-          <details style={{ marginTop: 18, paddingTop: 12, borderTop: '1px solid var(--border-soft)' }}>
+          <details style={{ marginTop: 24, paddingTop: 14, borderTop: '1px solid var(--border-soft)' }}>
             <summary style={{ fontSize: 12, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', cursor: 'pointer' }}>
               Model assumptions &amp; limitations ({(rm.limitations || []).length})
             </summary>
@@ -2747,4 +2917,4 @@ function PageCompare() {
   );
 }
 
-Object.assign(window, { PageOverview, PageProtocol, PageRates, PageRevenue, PageCollateral, PageRisk, PageLiquidation, PageCompare, PageMarketDetail });
+Object.assign(window, { PageOverview, PageProtocol, PageRates, PageRevenue, PageCollateral, PageRisk, PageLiquidation, PageCompare, PageMarketDetail, PageMethodology });

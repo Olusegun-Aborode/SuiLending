@@ -437,10 +437,21 @@ export async function GET() {
       } else {
         tvl = grossTvl;
       }
-      const avgBApy = protoLatest.length
-        ? protoLatest.reduce((s, r) => s + (r.borrowApy || 0), 0) / protoLatest.length
+      // Fees per protocol — proper per-pool sum, not a simple-average APY × total
+      // borrow shortcut. The simple-avg approach was over-stating Suilend by
+      // 6.7× because a handful of niche markets at 60–80% APY dragged its
+      // unweighted mean to ~40% while the borrow-weighted mean is ~6%. The
+      // correct quantity is Σ (perPoolBorrowUsd × perPoolBorrowAPY × RF),
+      // which is exactly what each protocol earns. RF=10% is still a coarse
+      // sector-wide proxy until adapters expose per-pool reserve factors.
+      const fees = protoLatest.reduce((s, r) => s + (r.totalBorrowsUsd || 0) * ((r.borrowApy || 0) / 100) * 0.10, 0) / 1e6;
+      // Borrow-weighted avg APY surfaced for the UI badge / methodology — same
+      // weighting that drives `fees`, so the two stay consistent.
+      const wtdBorrow = protoLatest.reduce((s, r) => s + (r.totalBorrowsUsd || 0), 0);
+      const avgBApy = wtdBorrow > 0
+        ? protoLatest.reduce((s, r) => s + (r.totalBorrowsUsd || 0) * (r.borrowApy || 0), 0) / wtdBorrow
         : 0;
-      const fees = (borrow * (avgBApy / 100) * 0.10) / 1e6;
+      void avgBApy; // currently informational; kept for future per-pool surfaces
       // tvlReference: DefiLlama's published TVL for the same protocol when
       // available. tvlCoverage: our number ÷ reference, capped at 1. Lets
       // the dashboard surface "we account for X% of DefiLlama's number"
