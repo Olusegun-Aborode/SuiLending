@@ -823,6 +823,37 @@ function computeIntegrityGates(inputs: IntegrityInputs): IntegrityGate[] {
     });
   }
 
+  // 7. Stale-collateral flag per §4 of the standard.
+  //
+  // Definition (verbatim from the standard): collateral that remains on a
+  // protocol but whose oracle no longer reflects a tradeable price is
+  // included in Total Supply only while a price is quoted, but flagged
+  // here and excluded from liquidatable figures.
+  //
+  // Heuristic (until per-asset price age is indexed): any non-dust row
+  // (supply ≥ $100K) whose `price` is null / 0 is treated as stale. This
+  // catches the price-fetch failure mode (DefiLlama miss, oracle gap, etc.).
+  // The standard wants a max-age check too; that requires a per-asset
+  // price timestamp we don't yet capture — documented as a follow-up.
+  {
+    const stale: string[] = [];
+    for (const r of allRows) {
+      const sup = num(r.supply ?? r.collateralUsd);
+      if (sup < 0.1) continue; // $0.1M floor — skip dust
+      const price = num(r.price ?? r.spotPrice);
+      const sym = String(r.sym ?? r.asset ?? '?');
+      if (price === 0) stale.push(`${r.protocol}/${sym}`);
+    }
+    gates.push({
+      id: 'stale_collateral',
+      label: 'Stale-collateral flag (§4 frozen-price rule)',
+      status: stale.length === 0 ? 'pass' : 'warn',
+      detail: stale.length === 0
+        ? 'No stale-priced non-dust collateral detected'
+        : `${stale.length} non-dust row(s) priced at 0 / no oracle: ${stale.slice(0, 4).join(', ')}${stale.length > 4 ? '…' : ''}`,
+    });
+  }
+
   return gates;
 }
 

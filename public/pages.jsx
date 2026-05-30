@@ -198,6 +198,12 @@ function ChartPanel({
   // string or an insight({ proto, metric, timeframe }) → string function;
   // the panel renders it as a footer below the chart body.
   insight,
+  // Per §6 chart rules: "every chart shows title, units, source, as-of".
+  // `source` is the named data provenance (e.g. "PoolDaily + DefiLlama
+  // fallback" / "Scallop indexer" / "on-chain RPC"). Renders in the chart
+  // footer alongside the as-of checkpoint pulled from the global asOf
+  // block. If unset, the footer is suppressed (we don't fake provenance).
+  source,
 }) {
   const initialProto = defaultProto != null
     ? defaultProto
@@ -310,11 +316,30 @@ function ChartPanel({
           // Footer per §6 Insight Rules — decision-linked "so what" line.
           return (
             <div style={{
-              padding: '8px 16px 12px', borderTop: '1px solid var(--border-soft)',
+              padding: '8px 16px 4px', borderTop: '1px solid var(--border-soft)',
               fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.4,
             }}>
               <span style={{ color: 'var(--orange)', marginRight: 6 }}>↪</span>
               {text}
+            </div>
+          );
+        })()}
+        {source && (() => {
+          // Source + as-of stamp footer per §6 chart rules. Pulls the global
+          // asOf block so every chart shares a single ground-truth checkpoint
+          // rather than each carrying its own pseudo-timestamp.
+          const asOf = D.asOf;
+          const cp = asOf?.checkpoint != null ? `#${asOf.checkpoint.toLocaleString()}` : '—';
+          const ts = asOf?.checkpointTimestamp ? new Date(asOf.checkpointTimestamp).toISOString().replace('T', ' ').slice(0, 19) + ' UTC' : '—';
+          return (
+            <div style={{
+              padding: insight ? '2px 16px 10px' : '8px 16px 10px',
+              borderTop: insight ? 'none' : '1px solid var(--border-soft)',
+              fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--fg-dim)', lineHeight: 1.4,
+              display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'space-between',
+            }}>
+              <span><span style={{ color: 'var(--fg-muted)' }}>source:</span> {source}</span>
+              <span><span style={{ color: 'var(--fg-muted)' }}>as of:</span> checkpoint {cp} · {ts}</span>
             </div>
           );
         })()}
@@ -371,6 +396,7 @@ function PageOverview() {
           className="col-8"
           protocolMode="multi"
           description="Stacked time series of total value locked across the selected protocols. Switch the Data dropdown to see Supplied, Borrowed, or Revenue instead. Use the timeframe toggle to zoom between 7, 30, and 90 days."
+          source="PoolDaily aggregates + DefiLlama gap-fill (per-protocol historical TVL)"
           shareId="overview.tvl-by-protocol"
           insight={({ proto, metric, timeframe }) => {
             const sel = D.protocols.filter(p => proto.includes(p.id));
@@ -423,6 +449,7 @@ function PageOverview() {
           className="col-4"
           protocolMode="none"
           description="Treemap of each protocol's share of today's total. Tile area is proportional to the protocol's value for the chosen metric — switch between TVL, Supplied, and Borrowed to see how the mix shifts. Hover any tile for exact value and percentage share."
+          source="protocolMetrics (live on-chain / native APIs, Bucket via DefiLlama)"
           shareId="overview.protocol-mix"
           insight={({ metric }) => {
             const items = D.protocols.map(p => {
@@ -471,6 +498,7 @@ function PageOverview() {
           title="Daily Flows"
           protocolMode="none"
           description="Daily $-volume of supply deposits, borrow draws, and liquidation repayments aggregated across all 5 protocols. Stacked bars show the mix on each day; the tooltip's TOTAL line tells you total daily activity. Filter to a single flow type via the Data dropdown."
+          source="volumeSeries (PoolDaily-derived supply/borrow + LiquidationEvent daily totals)"
           shareId="overview.daily-flows"
           insight={({ timeframe }) => {
             const sliced = D.volumeSeries.slice(-timeframe);
@@ -1901,11 +1929,40 @@ function PageMarketDetail() {
         <div className="panel col-6">
           <div className="panel-header"><span className="panel-title"><span className="bullet">●</span> Health Metrics</span></div>
           <div className="panel-body">
-            <ParamRow k="Aggregate CR" v={`${(market.collateralUsd / market.debtUsd * 100).toFixed(1)}%`} />
-            <ParamRow k="Headroom over Min CR" v={`${(market.collateralUsd / market.debtUsd * 100 - market.minCR).toFixed(1)}pp`} />
-            <ParamRow k="USDB / Collateral" v={`${(market.debtUsd / market.collateralUsd * 100).toFixed(1)}%`} />
-            <ParamRow k="Spot Price" v={fmtUSD(price, price < 10 ? 4 : 2)} />
-            <ParamRow k="Oracle" v="Pyth" />
+            {(() => {
+              // CDP variants per §4 of the analysis standard:
+              //   - Surplus / backing buffer = collateral − debt (cushion before peg breaks)
+              //   - Backing ratio = collateral ÷ debt (the CDP analogue of HF — should
+              //     stay materially above the min collateral ratio)
+              //   - Peg / redemption spread = debt-token market price vs $1 target.
+              //     Bucket's USDB / BUCK market prices on Sui DEXs aren't yet indexed
+              //     in our pipeline; rendered "—" with a "not indexed" tag to avoid
+              //     fabricating, per §1.2 / §8.C ("no un-sourced figure ships").
+              const surplusUsdM = market.collateralUsd - market.debtUsd;
+              const backingRatio = market.debtUsd > 0 ? market.collateralUsd / market.debtUsd * 100 : null;
+              const headroomPP = backingRatio != null ? backingRatio - market.minCR : null;
+              const surplusColor = surplusUsdM < 0 ? 'var(--red)' : surplusUsdM < market.debtUsd * 0.05 ? 'var(--orange)' : 'var(--green)';
+              const ratioColor = backingRatio == null ? 'var(--fg-muted)' :
+                                 backingRatio < market.minCR + 5 ? 'var(--red)' :
+                                 backingRatio < market.minCR * 1.20 ? 'var(--orange)' :
+                                 'var(--green)';
+              return (
+                <>
+                  <ParamRow k="Backing Ratio (CR)" v={backingRatio != null ? `${backingRatio.toFixed(1)}%` : '—'} c={ratioColor} />
+                  <ParamRow k="Min CR (liquidation)" v={`${market.minCR}%`} />
+                  <ParamRow k="Headroom over Min CR" v={headroomPP != null ? `${headroomPP.toFixed(1)}pp` : '—'} />
+                  <ParamRow k="Surplus / Backing Buffer" v={fmtUSD(surplusUsdM * 1e6, 2)} c={surplusColor} />
+                  <ParamRow k="USDB / Collateral (Util)" v={`${(market.debtUsd / Math.max(market.collateralUsd, 1e-9) * 100).toFixed(1)}%`} />
+                  {/* Peg / redemption spread per §4 CDP variants. USDB/BUCK
+                      market price not yet indexed; render "—" with a not-indexed
+                      tag rather than fake it. Redemption fee IS in vault data. */}
+                  <ParamRow k="Peg Spread (USDB vs $1)" v="—" c="var(--fg-muted)" />
+                  <ParamRow k="Redemption Fee" v={`${market.redemptionFee.toFixed(2)}%`} />
+                  <ParamRow k="Spot Price" v={fmtUSD(price, price < 10 ? 4 : 2)} />
+                  <ParamRow k="Oracle" v="Pyth" />
+                </>
+              );
+            })()}
           </div>
         </div>
       </div>
