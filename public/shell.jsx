@@ -9,6 +9,10 @@ const PAGES = [
   { id: 'rates',       label: 'Rates',       href: 'Rates.html',       icon: '%' },
   { id: 'revenue',     label: 'Revenue',     href: 'Revenue.html',     icon: '$' },
   { id: 'collateral',  label: 'Collateral',  href: 'Collateral.html',  icon: '⛨' },
+  // Risk page per §6 of the Lending Analysis Standard — HF distribution,
+  // collateral-at-risk, liquidation intensity/efficiency, liquidator
+  // leaderboard, HHI, days-since-bad-debt.
+  { id: 'risk',        label: 'Risk',        href: 'Risk.html',        icon: '!' },
   { id: 'liquidation', label: 'Liquidation', href: 'Liquidation.html', icon: '✖' },
 ];
 window.PAGES = PAGES;

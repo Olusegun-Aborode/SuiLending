@@ -956,6 +956,321 @@ function PageCollateral() {
 }
 
 // ════════════════════════════════════════════════════════════════
+// PAGE 5.5 — Risk (per §6 of the Lending Analysis Standard)
+// ════════════════════════════════════════════════════════════════
+//
+// Required panels per the standard:
+//   - HF distribution histogram
+//   - Collateral-at-risk at -10/-20/-30% price shock
+//   - Liquidation intensity (30D vol ÷ TVL) + efficiency
+//   - Liquidator leaderboard
+//   - HHI for asset concentration
+//   - Days since last bad debt (heuristic)
+//   - Largest liquidation events
+//
+// All metrics computed from data already in the API response — no extra
+// server-side endpoints required for v1. Per-position HF data isn't yet
+// indexed; the HF histogram is built across markets (one bin per market's
+// aggregate HF), which is documented in the panel caption.
+function PageRisk() {
+  const allRows = [...(D.pools || []), ...(D.vaults || [])];
+  const liqs = D.liquidations || [];
+
+  // Total TVL across all rows (use supply or collateralUsd as available).
+  const totalTvl = allRows.reduce((s, r) => s + (r.supply || r.collateralUsd || 0), 0);
+  const totalBorrow = allRows.reduce((s, r) => s + (r.borrow || r.debtUsd || 0), 0);
+
+  // 30D liquidation aggregates from the events table.
+  const liq30d = liqs;
+  const liq30dDebt = liq30d.reduce((s, e) => s + (e.debtRepaidUsd || 0), 0);
+  const liq30dColl = liq30d.reduce((s, e) => s + (e.collateralSeizedUsd || 0), 0);
+
+  // Liquidation intensity: 30D liquidated debt as % of TVL (per §4 Tier 2)
+  const liqIntensity = totalTvl > 0 ? (liq30dDebt / 1e6) / totalTvl * 100 : 0;
+  // Liquidation efficiency: collateral seized / debt repaid (closer to LT means tighter clearing)
+  const liqEfficiency = liq30dDebt > 0 ? liq30dColl / liq30dDebt : 0;
+
+  // Days since last bad-debt-shaped event. Heuristic: any liquidation event
+  // implies a position breached HF<1 — we use the most recent liquidation
+  // timestamp as the "days since last incident" signal. The standard
+  // (§4 Tier 2) wants a separate append-only incident log; until that
+  // exists, this is the closest proxy from current data.
+  const lastLiqTs = liq30d.length > 0
+    ? Math.max(...liq30d.map(e => new Date(e.t).getTime()))
+    : null;
+  const daysSinceLastIncident = lastLiqTs
+    ? Math.floor((Date.now() - lastLiqTs) / 86400000)
+    : null;
+
+  // HF distribution. Bins from 0 to 5+ in 0.5-wide buckets, plus a "no debt"
+  // category. Population: aggregate market-level HF (the field we expose).
+  // Per-position would be ideal — flagged as a known limitation in caption.
+  const hfBins = (() => {
+    const edges = [0, 0.5, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 5.0];
+    const bins = edges.slice(0, -1).map((lo, i) => ({
+      label: `${lo.toFixed(2)}–${edges[i+1].toFixed(2)}`,
+      count: 0, value: 0, lo, hi: edges[i+1],
+    }));
+    const above5 = { label: '5+', count: 0, value: 0 };
+    const noDebt = { label: 'no debt', count: 0, value: 0, color: 'var(--fg-dim)' };
+    for (const r of allRows) {
+      const hf = r.healthFactor;
+      const exposure = r.borrow || r.debtUsd || 0;
+      if (hf == null) { noDebt.count++; continue; }
+      if (hf >= 5) { above5.count++; above5.value += exposure; continue; }
+      const bin = bins.find(b => hf >= b.lo && hf < b.hi);
+      if (bin) { bin.count++; bin.value += exposure; }
+    }
+    // Color: <1 red, 1-1.5 orange, ≥1.5 green per §6 semantic risk tokens.
+    bins.forEach(b => {
+      b.color = b.hi <= 1 ? 'var(--red)' : b.hi <= 1.5 ? 'var(--orange)' : 'var(--green)';
+    });
+    above5.color = 'var(--green)';
+    return [...bins, above5, noDebt];
+  })();
+  // HF=1 reference line index (the liquidation threshold).
+  const hfBinAt1 = hfBins.findIndex(b => b.label.startsWith('1.00'));
+
+  // Collateral-at-risk at price shocks. For each row with HF defined and
+  // a liquidation threshold, simulate HF' = HF × (1 − shock). Rows whose
+  // simulated HF falls below 1 are flagged; sum their borrows.
+  const carShocks = [-0.10, -0.20, -0.30];
+  const car = carShocks.map(shock => {
+    let atRiskDebt = 0, atRiskCollateral = 0, count = 0;
+    for (const r of allRows) {
+      const hf = r.healthFactor;
+      if (hf == null) continue;
+      // Apply shock to the collateral side: HF' = HF × (1 + shock)
+      const newHf = hf * (1 + shock);
+      if (newHf < 1) {
+        atRiskDebt += (r.borrow || r.debtUsd || 0);
+        atRiskCollateral += (r.supply || r.collateralUsd || 0);
+        count++;
+      }
+    }
+    return { shockPct: Math.abs(shock * 100), debt: atRiskDebt, collateral: atRiskCollateral, count };
+  });
+
+  // Liquidator leaderboard — top 10 by 30D debt repaid USD.
+  const liqByAddr = liq30d.reduce((acc, e) => {
+    const k = e.liquidator || 'unknown';
+    if (!acc[k]) acc[k] = { addr: k, debtRepaid: 0, collateralSeized: 0, count: 0 };
+    acc[k].debtRepaid += e.debtRepaidUsd || 0;
+    acc[k].collateralSeized += e.collateralSeizedUsd || 0;
+    acc[k].count++;
+    return acc;
+  }, {});
+  const liquidators = Object.values(liqByAddr)
+    .sort((a, b) => b.debtRepaid - a.debtRepaid)
+    .slice(0, 10);
+
+  // HHI for asset concentration: Σ(share%)² across asset symbols by supply.
+  // Per the standard: >2500 = highly concentrated.
+  const supplyByAsset = allRows.reduce((acc, r) => {
+    const sym = r.sym || r.asset || '?';
+    const sup = r.supply || r.collateralUsd || 0;
+    acc[sym] = (acc[sym] || 0) + sup;
+    return acc;
+  }, {});
+  const totSupply = Object.values(supplyByAsset).reduce((s, v) => s + v, 0);
+  const hhi = Object.values(supplyByAsset).reduce((s, v) => {
+    const share = totSupply > 0 ? (v / totSupply * 100) : 0;
+    return s + share * share;
+  }, 0);
+  const hhiBand = hhi > 2500 ? { color: 'var(--red)',    label: 'highly concentrated' }
+                : hhi > 1500 ? { color: 'var(--orange)', label: 'moderate' }
+                :              { color: 'var(--green)',  label: 'diffuse' };
+
+  // Largest liquidation events (top 10 by debt repaid).
+  const largestEvents = [...liq30d]
+    .sort((a, b) => (b.debtRepaidUsd || 0) - (a.debtRepaidUsd || 0))
+    .slice(0, 10);
+
+  return (
+    <PageShell pageId="risk" title="Lending Terminal: SUI — Risk" terminal="lending-terminal-sui-risk">
+      <KpiStrip items={[
+        { id: 'lqi', label: 'Liq. intensity (30D)', value: `${liqIntensity.toFixed(2)}%`, change: 0, subLabel: 'debt liquidated ÷ TVL' },
+        { id: 'lqe', label: 'Liq. efficiency',      value: liqEfficiency > 0 ? `${liqEfficiency.toFixed(2)}×` : '—', change: 0, subLabel: 'collateral seized ÷ debt repaid' },
+        { id: 'dsi', label: 'Days since incident',  value: daysSinceLastIncident != null ? `${daysSinceLastIncident}d` : '—', change: 0, subLabel: 'last liquidation event' },
+        { id: 'hhi', label: 'Asset HHI',            value: hhi.toFixed(0), change: 0, subLabel: hhiBand.label },
+      ]} />
+
+      {/* HF distribution histogram (§6 mandatory panel) */}
+      <div style={{ marginTop: 16 }}>
+        <ChartPanel
+          title="Health Factor distribution"
+          protocolMode="none"
+          metricItems={null}
+          description="Distribution of market-level aggregate Health Factor across all pools/vaults. A bar in the 0.00–1.00 bucket means at least one market sits below liquidation threshold. Per-position HF would be ideal but isn't yet indexed; this market-level view is documented as a coarse signal."
+          render={({ size }) => {
+            const w = size === 'expanded' ? 1200 : 1200;
+            const h = size === 'expanded' ? 520 : 320;
+            return (
+              <Histogram bins={hfBins} width={w} height={h}
+                referenceX={hfBinAt1 >= 0 ? hfBinAt1 : null}
+                referenceLabel="HF = 1 (liquidation)"
+                countLabel="Markets"
+                valueLabel="Σ debt"
+                valueFormatter={v => fmtUSD(v * 1e6)} />
+            );
+          }}
+        />
+      </div>
+
+      {/* Collateral-at-risk at price shocks */}
+      <div style={{ marginTop: 16 }}>
+        <div className="panel">
+          <div className="panel-header">
+            <span className="panel-title">
+              <span className="bullet">●</span> Collateral-at-risk under price shock
+              <span className="info-icon" tabIndex={0}>
+                <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="7" x2="8" y2="11.5"/><circle cx="8" cy="4.8" r="0.4" fill="currentColor"/></svg>
+                <span className="info-tip">For each market, simulate HF' = HF × (1 − shock). Markets whose HF' &lt; 1 would be liquidatable. We sum their borrows + collateral. Per §5 of the standard the proper version uses Monte Carlo on per-position HF; this is a deterministic baseline pending the per-position indexer.</span>
+              </span>
+            </span>
+          </div>
+          <div className="panel-body">
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-mono)', fontSize: 13 }}>
+              <thead>
+                <tr style={{ textAlign: 'left', color: 'var(--fg-muted)', borderBottom: '1px solid var(--border)' }}>
+                  <th style={{ padding: '8px 4px' }}>Price shock</th>
+                  <th style={{ padding: '8px 4px' }}>Markets at risk</th>
+                  <th style={{ padding: '8px 4px' }}>Debt at risk</th>
+                  <th style={{ padding: '8px 4px' }}>Collateral at risk</th>
+                  <th style={{ padding: '8px 4px' }}>% of TVL</th>
+                </tr>
+              </thead>
+              <tbody>
+                {car.map((c, i) => {
+                  const pctTvl = totalTvl > 0 ? (c.collateral / totalTvl * 100) : 0;
+                  const color = pctTvl > 20 ? 'var(--red)' : pctTvl > 5 ? 'var(--orange)' : 'var(--fg)';
+                  return (
+                    <tr key={i} style={{ borderBottom: '1px solid var(--border-soft)' }}>
+                      <td style={{ padding: '10px 4px', fontWeight: 600 }}>−{c.shockPct}%</td>
+                      <td style={{ padding: '10px 4px' }}>{c.count}</td>
+                      <td style={{ padding: '10px 4px' }}>{fmtUSD(c.debt * 1e6)}</td>
+                      <td style={{ padding: '10px 4px' }}>{fmtUSD(c.collateral * 1e6)}</td>
+                      <td style={{ padding: '10px 4px', color }}>{pctTvl.toFixed(2)}%</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <div style={{ marginTop: 8, fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
+              Total TVL: {fmtUSD(totalTvl * 1e6, 1)} · methodology baseline pending Monte Carlo (§5)
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-12" style={{ marginTop: 16 }}>
+        {/* Liquidator leaderboard */}
+        <div className="panel col-6">
+          <div className="panel-header">
+            <span className="panel-title"><span className="bullet">●</span> Liquidator leaderboard (30D)</span>
+            <span style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>top {liquidators.length}</span>
+          </div>
+          <div className="panel-body">
+            {liquidators.length === 0 && (
+              <div style={{ padding: '12px 0', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                No liquidation events in the last 30 days.
+              </div>
+            )}
+            {liquidators.length > 0 && (
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', color: 'var(--fg-muted)', borderBottom: '1px solid var(--border)' }}>
+                    <th style={{ padding: '6px 4px', width: 22 }}>#</th>
+                    <th style={{ padding: '6px 4px' }}>Liquidator</th>
+                    <th style={{ padding: '6px 4px', textAlign: 'right' }}>Debt repaid</th>
+                    <th style={{ padding: '6px 4px', textAlign: 'right' }}>Events</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {liquidators.map((l, i) => (
+                    <tr key={l.addr} style={{ borderBottom: '1px solid var(--border-soft)' }}>
+                      <td style={{ padding: '6px 4px', color: 'var(--fg-dim)' }}>{String(i+1).padStart(2,'0')}</td>
+                      <td style={{ padding: '6px 4px' }}>{l.addr}</td>
+                      <td style={{ padding: '6px 4px', textAlign: 'right' }}>{fmtUSD(l.debtRepaid)}</td>
+                      <td style={{ padding: '6px 4px', textAlign: 'right' }}>{l.count}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
+        {/* Largest events */}
+        <div className="panel col-6">
+          <div className="panel-header">
+            <span className="panel-title"><span className="bullet">●</span> Largest events (30D)</span>
+          </div>
+          <div className="panel-body">
+            {largestEvents.length === 0 && (
+              <div style={{ padding: '12px 0', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                No events to show.
+              </div>
+            )}
+            {largestEvents.length > 0 && (
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', color: 'var(--fg-muted)', borderBottom: '1px solid var(--border)' }}>
+                    <th style={{ padding: '6px 4px' }}>When</th>
+                    <th style={{ padding: '6px 4px' }}>Protocol</th>
+                    <th style={{ padding: '6px 4px' }}>Market</th>
+                    <th style={{ padding: '6px 4px', textAlign: 'right' }}>Debt</th>
+                    <th style={{ padding: '6px 4px', textAlign: 'right' }}>Collateral</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {largestEvents.map((e, i) => {
+                    const d = new Date(e.t);
+                    const ago = Math.floor((Date.now() - d.getTime()) / 86400000);
+                    return (
+                      <tr key={i} style={{ borderBottom: '1px solid var(--border-soft)' }}>
+                        <td style={{ padding: '6px 4px', color: 'var(--fg-muted)' }}>{ago}d ago</td>
+                        <td style={{ padding: '6px 4px' }}>{e.protocol}</td>
+                        <td style={{ padding: '6px 4px' }}>{e.market || e.debtAsset || '?'}</td>
+                        <td style={{ padding: '6px 4px', textAlign: 'right' }}>{fmtUSD(e.debtRepaidUsd || 0)}</td>
+                        <td style={{ padding: '6px 4px', textAlign: 'right' }}>{fmtUSD(e.collateralSeizedUsd || 0)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Asset concentration (HHI) */}
+      <div style={{ marginTop: 16 }}>
+        <div className="panel">
+          <div className="panel-header">
+            <span className="panel-title">
+              <span className="bullet">●</span> Asset concentration (HHI)
+              <span style={{ marginLeft: 12, color: hhiBand.color, fontSize: 11, fontFamily: 'var(--font-mono)' }}>
+                HHI {hhi.toFixed(0)} · {hhiBand.label}
+              </span>
+            </span>
+            <span style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
+              Σ(share%)² · &gt;2500 = highly concentrated
+            </span>
+          </div>
+          <div className="panel-body">
+            <Leaderboard items={Object.entries(supplyByAsset)
+              .map(([sym, v]) => ({ name: sym, value: v * 1e6 }))
+              .sort((a, b) => b.value - a.value)
+              .slice(0, 12)} format={fmtUSD} />
+          </div>
+        </div>
+      </div>
+    </PageShell>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
 // PAGE 6 — Liquidation
 // ════════════════════════════════════════════════════════════════
 function PageLiquidation() {
@@ -1371,4 +1686,4 @@ function ParamRow({ k, v, c }) {
   );
 }
 
-Object.assign(window, { PageOverview, PageProtocol, PageRates, PageRevenue, PageCollateral, PageLiquidation, PageMarketDetail });
+Object.assign(window, { PageOverview, PageProtocol, PageRates, PageRevenue, PageCollateral, PageRisk, PageLiquidation, PageMarketDetail });
