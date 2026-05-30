@@ -97,6 +97,269 @@ function PageShell({ pageId, title, terminal, headerRight, children }) {
   );
 }
 
+// ── Shared visual helpers ───────────────────────────────────────
+//
+// One InfoTip component used dashboard-wide so methodology / formulas always
+// look the same and never bloat the panel body. Drop next to any title,
+// header chip, or KPI label. The CSS hover is the same `info-icon` /
+// `info-tip` pair we already use — this is just a JSX wrapper so each
+// caller doesn't re-implement the SVG + markup.
+function InfoTip({ children, size = 12, style }) {
+  return (
+    <span className="info-icon" tabIndex={0} style={{ marginLeft: 6, ...style }}>
+      <svg viewBox="0 0 16 16" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.5">
+        <circle cx="8" cy="8" r="6.5" />
+        <line x1="8" y1="7" x2="8" y2="11.5" />
+        <circle cx="8" cy="4.8" r="0.4" fill="currentColor" />
+      </svg>
+      <span className="info-tip" role="tooltip">{children}</span>
+    </span>
+  );
+}
+
+// Concentration band — shared because Asset HHI, Oracle HHI, and the Risk
+// page all colour-code the same way. Single source of truth for the §4
+// thresholds (>2500 highly concentrated, 1500–2500 moderate).
+function concentrationBand(hhi) {
+  if (hhi > 2500) return { color: 'var(--red)',    label: 'highly concentrated' };
+  if (hhi > 1500) return { color: 'var(--orange)', label: 'moderate' };
+  return { color: 'var(--green)', label: 'diffuse' };
+}
+
+// Single-glance "where in the band" chip — used in panel headers next to
+// the title. One number + colour + plain-English label, the formula is in
+// the panel's own InfoTip. Replaces the old "HHI 5135 · highly concentrated"
+// fine-print captions everywhere.
+function ConcentrationChip({ hhi }) {
+  const band = concentrationBand(hhi);
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6,
+      padding: '3px 9px', borderRadius: 10,
+      background: 'transparent', border: `1px solid ${band.color}`,
+      fontFamily: 'var(--font-mono)', fontSize: 11,
+      color: band.color,
+    }}>
+      <span style={{ width: 6, height: 6, background: band.color, borderRadius: 3 }} />
+      {band.label} · HHI {Math.round(hhi).toLocaleString()}
+    </span>
+  );
+}
+
+// Stat tile — 12px label over a larger value. Used in concentration
+// strip + Modeled Risk scorecards. Just the visual; no semantics baked in.
+function MiniStat({ label, value, color, sub }) {
+  return (
+    <div style={{ padding: '8px 10px', borderRadius: 6, background: 'var(--bg-soft)' }}>
+      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</div>
+      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 18, fontWeight: 600, color: color || 'var(--fg)', marginTop: 4 }}>{value}</div>
+      {sub && <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--fg-muted)', marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+// Tiny colour-swatch legend item. Used in chart headers so a reader can
+// see what each colour means without hovering individual marks.
+function LegendChip({ color, text }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <span style={{ width: 10, height: 10, borderRadius: 2, background: color }} />
+      {text}
+    </span>
+  );
+}
+
+// Horizontal share bars — one row per category, bar width proportional to
+// value. Cleaner than a stacked bar when there are 4-6 segments because
+// each label/value reads at a glance.
+function ShareBars({ items, formatter = (v) => v.toFixed(0) }) {
+  const total = items.reduce((s, x) => s + (x.value || 0), 0);
+  if (total <= 0) return <div style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>No data</div>;
+  return (
+    <div style={{ fontFamily: 'var(--font-mono)' }}>
+      {items.map((it, i) => {
+        const pct = (it.value || 0) / total * 100;
+        return (
+          <div key={i} style={{ marginBottom: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3, fontSize: 12 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ width: 9, height: 9, borderRadius: 2, background: it.color || 'var(--fg-muted)' }} />
+                <span style={{ color: 'var(--fg)' }}>{it.label}</span>
+              </span>
+              <span style={{ color: 'var(--fg-muted)' }}>
+                {formatter(it.value)} <span style={{ marginLeft: 6, color: 'var(--fg-dim)' }}>{pct.toFixed(1)}%</span>
+              </span>
+            </div>
+            <div style={{ height: 6, background: 'var(--bg-soft)', borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{ width: `${Math.max(1, pct)}%`, height: '100%', background: it.color || 'var(--fg-muted)' }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Donut for small categorical splits (e.g. oracle providers, fee mix).
+// Cleaner than a text table — shows share at a glance and uses the same
+// colour tokens as the rest of the dashboard. `items: [{name, value, color}]`.
+function Donut({ items, size = 140, thickness = 22 }) {
+  const total = items.reduce((s, x) => s + (x.value || 0), 0);
+  if (total <= 0 || items.length === 0) {
+    return <div style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>No data</div>;
+  }
+  const r  = size / 2 - thickness / 2;
+  const cx = size / 2, cy = size / 2;
+  const C  = 2 * Math.PI * r;
+  let acc = 0;
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      {items.map((it, i) => {
+        const frac = (it.value || 0) / total;
+        const dash = C * frac;
+        const gap  = C - dash;
+        const off  = -acc * C;
+        acc += frac;
+        return (
+          <circle key={i} cx={cx} cy={cy} r={r} fill="none"
+            stroke={it.color || 'var(--fg-muted)'} strokeWidth={thickness}
+            strokeDasharray={`${dash} ${gap}`} strokeDashoffset={off}
+            transform={`rotate(-90 ${cx} ${cy})`} />
+        );
+      })}
+    </svg>
+  );
+}
+
+// Half-circle gauge for headline risk probabilities. Reads instantly,
+// supports red/amber/green bands. `value` ∈ [0,1]. `bands` is two
+// breakpoints (e.g. [0.05, 0.20]) — under first = green, between = amber,
+// above second = red. Used by the Modeled Risk panel.
+function Gauge({ value, bands = [0.05, 0.20], width = 240, height = 130, label }) {
+  const v = Math.max(0, Math.min(1, value));
+  const cx = width / 2, cy = height - 18, r = Math.min(width / 2, height) - 22;
+  const polar = (t) => {
+    const ang = Math.PI * (1 - t);
+    return [cx + r * Math.cos(ang), cy - r * Math.sin(ang)];
+  };
+  const arc = (a, b, color, w = 14) => {
+    const [x1, y1] = polar(a), [x2, y2] = polar(b);
+    const large = (b - a) > 0.5 ? 1 : 0;
+    return (
+      <path d={`M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2}`}
+        fill="none" stroke={color} strokeWidth={w} strokeLinecap="round" />
+    );
+  };
+  const color = v < bands[0] ? 'var(--green)' : v < bands[1] ? 'var(--orange)' : 'var(--red)';
+  const [tx, ty] = polar(v);
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+      {/* background bands */}
+      {arc(0, bands[0], 'var(--green)', 10)}
+      {arc(bands[0], bands[1], 'var(--orange)', 10)}
+      {arc(bands[1], 1, 'var(--red)', 10)}
+      {/* needle */}
+      <line x1={cx} y1={cy} x2={tx} y2={ty} stroke="var(--fg)" strokeWidth={2} strokeLinecap="round" />
+      <circle cx={cx} cy={cy} r={4} fill="var(--fg)" />
+      {/* labels */}
+      <text x={cx} y={cy - r - 8} textAnchor="middle" style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 600, fill: color }}>
+        {(v * 100).toFixed(1)}%
+      </text>
+      {label && <text x={cx} y={cy + 16} textAnchor="middle" style={{ fontFamily: 'var(--font-mono)', fontSize: 10, fill: 'var(--fg-muted)' }}>{label}</text>}
+      <text x={polar(0)[0]} y={polar(0)[1] + 14} textAnchor="middle" style={{ fontFamily: 'var(--font-mono)', fontSize: 9, fill: 'var(--fg-muted)' }}>0%</text>
+      <text x={polar(1)[0]} y={polar(1)[1] + 14} textAnchor="middle" style={{ fontFamily: 'var(--font-mono)', fontSize: 9, fill: 'var(--fg-muted)' }}>100%</text>
+    </svg>
+  );
+}
+
+// Horizontal paired bars for comparing two estimates side-by-side
+// (e.g. Historical-VaR vs Heavy-tail VaR). `rows: [{label, a, b, max?, ...}]`.
+function PairedBars({ rows, aLabel, bLabel, aColor = 'var(--blue)', bColor = 'var(--orange)', max, width = 360, formatter = (v) => v.toFixed(2) }) {
+  const peak = max || Math.max(0.0001, ...rows.flatMap(r => [r.a, r.b]));
+  const barW = (v) => Math.max(2, (v / peak) * (width - 100));
+  return (
+    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+      <div style={{ display: 'flex', gap: 14, marginBottom: 8, fontSize: 10, color: 'var(--fg-muted)' }}>
+        <span><span style={{ display: 'inline-block', width: 10, height: 10, background: aColor, borderRadius: 2, marginRight: 4, verticalAlign: 'middle' }} />{aLabel}</span>
+        <span><span style={{ display: 'inline-block', width: 10, height: 10, background: bColor, borderRadius: 2, marginRight: 4, verticalAlign: 'middle' }} />{bLabel}</span>
+      </div>
+      {rows.map((r, i) => (
+        <div key={i} style={{ display: 'grid', gridTemplateColumns: '60px 1fr', gap: 12, alignItems: 'center', marginBottom: 8 }}>
+          <div style={{ color: 'var(--fg-muted)', fontWeight: 600 }}>{r.label}</div>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+              <div style={{ height: 10, width: barW(r.a), background: aColor, borderRadius: 2 }} />
+              <span style={{ color: aColor, fontSize: 11 }}>{formatter(r.a)}</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ height: 10, width: barW(r.b), background: bColor, borderRadius: 2 }} />
+              <span style={{ color: bColor, fontSize: 11 }}>{formatter(r.b)}</span>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Asset-symbol normalization for the Collateral page.
+//
+// Lending adapters report the on-chain symbol of every market — and Bucket's
+// extra-tvl walks emit synthetic symbols for vault wrappers (`PSM-BUCK`,
+// `BKT-SAVE-HASUI_S`, `BKT-PSM-USDC_CIRCLE`, …). Treating those as separate
+// assets double-counts the underlying (e.g. haSUI shows once as the pool
+// symbol and again as `BKT-SAVE-HASUI_S`). It also case-splits the same
+// on-chain token: xBTC (NAVI) and XBTC (Alphalend/Suilend) are the same
+// wrapped BTC. This map collapses every wrapper to its underlying asset and
+// case-folds equivalents so the "Collateral by Asset" view shows real
+// economic exposure, not adapter labels.
+function normalizeAssetSymbol(sym) {
+  if (!sym) return sym;
+  const s = String(sym);
+  // Direct overrides (wrappers that strip down to an LP that's effectively USDC).
+  const map = {
+    BUCKETUS: 'USDC', BLUEFIN_STABLE_LP: 'USDC',
+    CETABLE: 'USDC', STAPEARL: 'USDC',
+    USDC_CIRCLE: 'USDC', USDC_WORMHOLE: 'USDC',
+    USDT_WORMHOLE: 'USDT', SUI_BRIDGE_USDT: 'USDT', suiUSDT: 'USDT',
+    wUSDT: 'USDT', wUSDC: 'USDC',
+    SAVING: 'USDB',  // SAVING-USDB → USDB
+    xBTC: 'XBTC', wBTC: 'WBTC',
+  };
+  // Direct match first
+  if (map[s]) return map[s];
+  // Common prefixes — peel layer by layer.
+  // PSM-BUCK / PSM-USDC / PSM-USDT / PSM-USDSUI / SAVING-USDB
+  let m = s.match(/^PSM-(.+)$/);                    if (m) return normalizeAssetSymbol(m[1]);
+  m = s.match(/^SAVING-(.+)$/);                     if (m) return m[1].toUpperCase();
+  m = s.match(/^V1PSM-(.+)$/);                      if (m) return normalizeAssetSymbol(m[1]);
+  m = s.match(/^V1-(.+)$/);                         if (m) return normalizeAssetSymbol(m[1]);
+  m = s.match(/^BKT-PSM-(.+)$/);                    if (m) return normalizeAssetSymbol(m[1]);
+  // BKT-SAVE-HASUI_S → haSUI, BKT-SAVE-NAVI_STSUI → stSUI, etc.
+  m = s.match(/^BKT-SAVE-(.+)$/);                   if (m) {
+    const part = m[1].replace(/_S$/, '').replace(/^NAVI_/, '').replace(/_NAVI_POND$/, '');
+    const u = part.toUpperCase();
+    if (u === 'HASUI') return 'haSUI';
+    if (u === 'AFSUI') return 'afSUI';
+    if (u === 'VSUI')  return 'vSUI';
+    if (u === 'STSUI') return 'stSUI';
+    if (u === 'SUI')   return 'SUI';
+    return part;
+  }
+  m = s.match(/^BKT-SCOIN-(.+)$/);                  if (m) return normalizeAssetSymbol(m[1]);
+  m = s.match(/^BKT-AF-FOUNTAIN-/);                 if (m) return 'BUCK';
+  m = s.match(/^BKT-KRIYA-FOUNTAIN-/);              if (m) return 'BUCK';
+  m = s.match(/^BKT-AF-(.+)$/);                     if (m) {
+    // BKT-AF-AFSUI-SUI is an afSUI/SUI LP — book to afSUI (it's the staked
+    // asset in the CDP that's actually deposited; the bucketUS wrappers
+    // round-trip into the same pricing source).
+    return 'afSUI';
+  }
+  // Final dedupe: anything matching a known underlying name post-cleanup.
+  if (map[s]) return map[s];
+  return s;
+}
+
 function KpiStrip({ items }) {
   return (
     <div className="panel" style={{ marginTop: 16 }}>
@@ -775,8 +1038,10 @@ function PageRates() {
 
       <div style={{ marginTop: 16 }}>
         <ChartPanel
-          title="Pool-Archetype Rates"
+          title="Lending markets — rates, utilization, supply"
+          caption="every pool across the 4 pool-archetype protocols"
           protocolMode="single"
+          description="Snapshot of all lending markets on Sui from the four pool-archetype protocols (NAVI, Suilend, Scallop, AlphaLend). Click a row to drill into the market. Sort by any column from the dropdown. Spread = borrow APY − supply APY (what the protocol + suppliers split). Kink = utilization where the IRM bends into the jump-rate regime."
           metricItems={[
             { id: 'supplyApy',  label: 'Sort: Supply APY' },
             { id: 'borrowApy',  label: 'Sort: Borrow APY' },
@@ -941,9 +1206,11 @@ function PageRevenue() {
 
       <div className="grid grid-12" style={{ marginTop: 16 }}>
         <ChartPanel
-          title="Revenue by Protocol — 30D"
+          title="Where the fee revenue comes from"
+          caption="last 30 days, stacked by protocol"
           className="col-8"
           protocolMode="multi"
+          description="Daily protocol-level fee revenue, stacked. Fees ≈ borrow × borrow APY × reserve factor; we use a coarse 10% reserve factor across protocols as the proxy until each adapter exposes its actual per-pool number. Toggle the metric to compare against TVL on the same y-axis."
           metricItems={[
             { id: 'revenue', label: 'Revenue ($M)' },
             { id: 'tvl',     label: 'TVL ($M)' },
@@ -1029,12 +1296,37 @@ function PageRevenue() {
 // PAGE 5 — Collateral
 // ════════════════════════════════════════════════════════════════
 function PageCollateral() {
-  // Aggregate by asset across ALL protocols (default) — also support per-protocol view
+  // Aggregate by asset across ALL protocols (default) — also support per-protocol view.
+  //
+  // Two normalization passes here:
+  //   1. Vault unwrap: Bucket reports synthetic symbols for vault wrappers
+  //      (PSM-BUCK, BKT-SAVE-HASUI_S, BKT-PSM-USDC_CIRCLE, …). Without
+  //      mapping these back to USDC / haSUI / etc., the "Collateral by Asset"
+  //      view both invents fake assets AND double-counts the underlying.
+  //   2. Case dedupe: xBTC (NAVI) and XBTC (Alphalend/Suilend) are the same
+  //      on-chain wrapped BTC. wBTC and WBTC, wUSDT and suiUSDT and USDT,
+  //      same story. We canonicalize via normalizeAssetSymbol() before
+  //      summing so the bars don't get split across casings.
+  //
+  // Sym-to-name shown in tooltips so a curious reader can see which raw
+  // labels were merged into each bucket.
   const aggByAsset = (protoFilter) => {
     const byAsset = {};
-    D.pools.forEach(p => { if (matchProto(p, protoFilter)) byAsset[p.sym] = (byAsset[p.sym] || 0) + p.supply; });
-    D.vaults.forEach(v => { if (matchProto(v, protoFilter)) byAsset[v.sym] = (byAsset[v.sym] || 0) + v.collateralUsd; });
-    return Object.entries(byAsset).map(([sym, value]) => ({ sym, value })).sort((a,b) => b.value - a.value);
+    const sources = {};
+    const push = (sym, value) => {
+      const k = normalizeAssetSymbol(sym);
+      byAsset[k] = (byAsset[k] || 0) + (value || 0);
+      if (k !== sym) {
+        sources[k] = sources[k] || new Set();
+        sources[k].add(sym);
+      }
+    };
+    D.pools.forEach(p => { if (matchProto(p, protoFilter)) push(p.sym, p.supply); });
+    D.vaults.forEach(v => { if (matchProto(v, protoFilter)) push(v.sym, v.collateralUsd); });
+    return Object.entries(byAsset).map(([sym, value]) => ({
+      sym, value,
+      mergedFrom: sources[sym] ? Array.from(sources[sym]).sort() : null,
+    })).sort((a,b) => b.value - a.value);
   };
 
   const allAssetRows = aggByAsset('all');
@@ -1083,9 +1375,9 @@ function PageCollateral() {
     .sort((a, b) => b.share - a.share);
   const oracleHhi = oracleRows.reduce((s, r) => s + r.share * r.share, 0);
 
-  const concentrationBand = (hhi) => hhi > 2500 ? { color: 'var(--red)',    label: 'highly concentrated' }
-                                  : hhi > 1500 ? { color: 'var(--orange)', label: 'moderate' }
-                                  :              { color: 'var(--green)',  label: 'diffuse' };
+  // colour tokens for oracle providers — generic so adding a Switchboard /
+  // Supra adapter in future just shows up with the right swatch.
+  const ORACLE_COLOR = { Pyth: '#7B61FF', Switchboard: '#00C896', Supra: '#E5B345', unknown: 'var(--fg-muted)' };
 
   const colorFor = (sym) => {
     const m = { SUI: '#4DA2FF', USDC: '#2775CA', USDT: '#26A17B', WETH: '#627EEA', WBTC: '#F09242', vSUI: '#7C3AED', sSUI: '#FF6B35', afSUI: '#00C896', haSUI: '#E5B345', CETUS: '#9CA3AF' };
@@ -1103,47 +1395,79 @@ function PageCollateral() {
         { id: 'stab', label: 'Stable Debt Share', value: `${stableBorrowShare.toFixed(1)}%`, change: 0, subLabel: 'stables ÷ all borrows' },
       ]} />
 
-      {/* Concentration panel per §4 Tier 3:
-            Top-N share, oracle concentration, stablecoin-debt-share trend. */}
+      {/* Concentration panels per §4 Tier 3. Asset uses a horizontal share
+          bar (top 5 + the long tail), Oracle uses a donut. Formulas /
+          methodology live in tooltips so the panel surface stays clean. */}
       <div className="grid grid-12" style={{ marginTop: 16 }}>
         <div className="panel col-6">
           <div className="panel-header">
-            <span className="panel-title"><span className="bullet">●</span> Asset concentration</span>
-            <span style={{ fontSize: 11, color: concentrationBand(supplyHhi).color, fontFamily: 'var(--font-mono)' }}>
-              HHI {supplyHhi.toFixed(0)} · {concentrationBand(supplyHhi).label}
+            <span className="panel-title">
+              <span className="bullet">●</span> Asset concentration
+              <InfoTip>
+                HHI = Σ(share%)² across collateral assets. Bands per the §4 standard:
+                {' '}&gt;2500 highly concentrated, 1500–2500 moderate, ≤1500 diffuse.
+                {' '}Top-1 share is shown alongside as a quicker single-point read.
+              </InfoTip>
             </span>
+            <ConcentrationChip hhi={supplyHhi} />
           </div>
-          <div className="panel-body" style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}>
-            <ParamRow k="Top 1 share" v={`${top1Share.toFixed(1)}%`} c={top1Share > 50 ? 'var(--red)' : top1Share > 30 ? 'var(--orange)' : 'var(--fg)'} />
-            <ParamRow k="Top 3 share" v={`${top3Share.toFixed(1)}%`} />
-            <ParamRow k="Top 5 share" v={`${top5Share.toFixed(1)}%`} />
-            <ParamRow k="Unique assets" v={String(allAssetRows.length)} />
-            <ParamRow k="HHI" v={supplyHhi.toFixed(0)} c={concentrationBand(supplyHhi).color} />
-            <div style={{ marginTop: 8, fontSize: 11, color: 'var(--fg-muted)' }}>
-              HHI = Σ(share%)². Standard: &gt;2500 highly concentrated.
+          <div className="panel-body">
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
+              <MiniStat label="Top 1" value={`${top1Share.toFixed(1)}%`} color={top1Share > 50 ? 'var(--red)' : top1Share > 30 ? 'var(--orange)' : 'var(--fg)'} />
+              <MiniStat label="Top 3" value={`${top3Share.toFixed(1)}%`} />
+              <MiniStat label="Top 5" value={`${top5Share.toFixed(1)}%`} />
+              <MiniStat label="Unique" value={String(allAssetRows.length)} />
             </div>
+            {/* Top-5 horizontal share bars + collapsed "Other" — actually visual */}
+            <ShareBars
+              items={[
+                ...allAssetRows.slice(0, 5).map(r => ({ label: r.sym, value: r.value, color: colorFor(r.sym) })),
+                allAssetRows.length > 5
+                  ? { label: `Other (${allAssetRows.length - 5})`, value: allAssetRows.slice(5).reduce((s, r) => s + r.value, 0), color: 'var(--fg-muted)' }
+                  : null,
+              ].filter(Boolean)}
+              formatter={(v) => fmtUSD(v * 1e6, 1)}
+            />
           </div>
         </div>
 
         <div className="panel col-6">
           <div className="panel-header">
-            <span className="panel-title"><span className="bullet">●</span> Oracle concentration</span>
-            <span style={{ fontSize: 11, color: concentrationBand(oracleHhi).color, fontFamily: 'var(--font-mono)' }}>
-              HHI {oracleHhi.toFixed(0)} · {concentrationBand(oracleHhi).label}
+            <span className="panel-title">
+              <span className="bullet">●</span> Oracle concentration
+              <InfoTip>
+                Distribution of indexed pools by price-oracle provider. A single
+                oracle dominating the lending sector is a shared liveness / manipulation risk
+                — if it stalls, every protocol on that feed mis-prices at the same moment.
+                HHI uses the same bands as asset concentration.
+              </InfoTip>
             </span>
+            <ConcentrationChip hhi={oracleHhi} />
           </div>
-          <div className="panel-body" style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}>
+          <div className="panel-body">
             {oracleRows.length === 0 && (
-              <div style={{ color: 'var(--fg-muted)' }}>No oracle data indexed.</div>
+              <div style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>No oracle data indexed.</div>
             )}
-            {oracleRows.map(r => (
-              <ParamRow key={r.name} k={`${r.name}`} v={`${r.share.toFixed(1)}% (${r.count} pools)`}
-                c={r.share > 80 ? 'var(--red)' : r.share > 50 ? 'var(--orange)' : 'var(--fg)'} />
-            ))}
-            <div style={{ marginTop: 8, fontSize: 11, color: 'var(--fg-muted)' }}>
-              Per §4 Tier 3 — composite feeds traced to their root source.
-              All pools currently price via Pyth — single point of failure for the lending sector on Sui.
-            </div>
+            {oracleRows.length > 0 && (
+              <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: 18, alignItems: 'center' }}>
+                <Donut
+                  items={oracleRows.map(r => ({ name: r.name, value: r.count, color: ORACLE_COLOR[r.name] ?? 'var(--fg-muted)' }))}
+                  size={140} thickness={22} />
+                <div>
+                  {oracleRows.map(r => (
+                    <div key={r.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '6px 0', borderBottom: '1px solid var(--border-soft)', fontFamily: 'var(--font-mono)' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                        <span style={{ width: 9, height: 9, borderRadius: 2, background: ORACLE_COLOR[r.name] ?? 'var(--fg-muted)' }} />
+                        {r.name}
+                      </span>
+                      <span style={{ fontSize: 13, color: r.share > 80 ? 'var(--red)' : r.share > 50 ? 'var(--orange)' : 'var(--fg)' }}>
+                        {r.share.toFixed(1)}% <span style={{ color: 'var(--fg-muted)', fontSize: 11 }}>({r.count})</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -1348,8 +1672,12 @@ function PageRisk() {
 
   // HHI for asset concentration: Σ(share%)² across asset symbols by supply.
   // Per the standard: >2500 = highly concentrated.
+  // Asset concentration on the Risk page uses the same vault-unwrap +
+  // case-fold normalization as PageCollateral so the HHI here matches what
+  // the Collateral page shows. Without this the Risk HHI drifts higher
+  // because adapter labels (BKT-SAVE-…) get treated as separate assets.
   const supplyByAsset = allRows.reduce((acc, r) => {
-    const sym = r.sym || r.asset || '?';
+    const sym = normalizeAssetSymbol(r.sym || r.asset || '?');
     const sup = r.supply || r.collateralUsd || 0;
     acc[sym] = (acc[sym] || 0) + sup;
     return acc;
@@ -1359,9 +1687,7 @@ function PageRisk() {
     const share = totSupply > 0 ? (v / totSupply * 100) : 0;
     return s + share * share;
   }, 0);
-  const hhiBand = hhi > 2500 ? { color: 'var(--red)',    label: 'highly concentrated' }
-                : hhi > 1500 ? { color: 'var(--orange)', label: 'moderate' }
-                :              { color: 'var(--green)',  label: 'diffuse' };
+  const hhiBand = concentrationBand(hhi);
 
   // Largest liquidation events (top 10 by debt repaid).
   const largestEvents = [...liq30d]
@@ -1377,70 +1703,85 @@ function PageRisk() {
         { id: 'hhi', label: 'Asset HHI',            value: hhi.toFixed(0), change: 0, subLabel: hhiBand.label },
       ]} />
 
-      {/* HF distribution histogram (§6 mandatory panel) */}
+      {/* HF distribution histogram (§6 mandatory panel) — with a colour
+          legend so readers know what red/orange/green mean and a plain-
+          English x-axis caption. Math moves into the InfoTip. */}
       <div style={{ marginTop: 16 }}>
         <ChartPanel
-          title="Health Factor distribution"
+          title="Where do markets sit on the liquidation curve?"
+          caption="Market-level Health Factor distribution"
           protocolMode="none"
           metricItems={null}
-          description="Distribution of market-level aggregate Health Factor across all pools/vaults. A bar in the 0.00–1.00 bucket means at least one market sits below liquidation threshold. Per-position HF would be ideal but isn't yet indexed; this market-level view is documented as a coarse signal."
+          description={"Health Factor is how much price drop a market can absorb before liquidation: HF = (collateral × liquidation threshold) ÷ debt. HF = 1 is the trigger. Markets with no debt are shown as 'no debt' (not at risk). We use market-aggregate HF — per-wallet positions aren't indexed across all 5 protocols yet."}
           render={({ size }) => {
             const w = size === 'expanded' ? 1200 : 1200;
             const h = size === 'expanded' ? 520 : 320;
             return (
-              <Histogram bins={hfBins} width={w} height={h}
-                referenceX={hfBinAt1 >= 0 ? hfBinAt1 : null}
-                referenceLabel="HF = 1 (liquidation)"
-                countLabel="Markets"
-                valueLabel="Σ debt"
-                valueFormatter={v => fmtUSD(v * 1e6)} />
+              <div>
+                {/* Inline legend — tells the reader exactly what the colour
+                    bands mean without making them hover individual bars. */}
+                <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginBottom: 10, fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)' }}>
+                  <LegendChip color="var(--red)"    text="At risk (HF < 1)" />
+                  <LegendChip color="var(--orange)" text="Thin buffer (HF 1.0 – 1.5)" />
+                  <LegendChip color="var(--green)"  text="Healthy (HF ≥ 1.5)" />
+                  <LegendChip color="var(--fg-dim)" text="No debt" />
+                </div>
+                <Histogram bins={hfBins} width={w} height={h}
+                  referenceX={hfBinAt1 >= 0 ? hfBinAt1 : null}
+                  referenceLabel="HF = 1 (liquidation)"
+                  countLabel="Markets"
+                  valueLabel="Σ debt"
+                  valueFormatter={v => fmtUSD(v * 1e6)} />
+                <div style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', marginTop: 6 }}>
+                  ← closer to liquidation &nbsp;·&nbsp; Health Factor &nbsp;·&nbsp; safer →
+                </div>
+              </div>
             );
           }}
         />
       </div>
 
-      {/* Collateral-at-risk at price shocks */}
+      {/* Collateral-at-risk at price shocks — top row is a visual share bar
+          for each shock so the "% of TVL" reads at a glance. Methodology
+          tucked into a single tooltip. */}
       <div style={{ marginTop: 16 }}>
         <div className="panel">
           <div className="panel-header">
             <span className="panel-title">
-              <span className="bullet">●</span> Collateral-at-risk under price shock
-              <span className="info-icon" tabIndex={0}>
-                <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="7" x2="8" y2="11.5"/><circle cx="8" cy="4.8" r="0.4" fill="currentColor"/></svg>
-                <span className="info-tip">For each market, simulate HF' = HF × (1 − shock). Markets whose HF' &lt; 1 would be liquidatable. We sum their borrows + collateral. Per §5 of the standard the proper version uses Monte Carlo on per-position HF; this is a deterministic baseline pending the per-position indexer.</span>
-              </span>
+              <span className="bullet">●</span> What if collateral prices fall?
+              <InfoTip>
+                Deterministic shock test. For each market we scale Health Factor by (1 − shock); markets
+                whose HF drops below 1 would be liquidatable. We sum their borrows and collateral and
+                divide by total TVL. The proper version uses Monte Carlo on per-position HF (see Modeled
+                Risk below) — this is a single-shot baseline.
+              </InfoTip>
+            </span>
+            <span style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
+              total TVL: {fmtUSD(totalTvl * 1e6, 1)}
             </span>
           </div>
           <div className="panel-body">
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-mono)', fontSize: 13 }}>
-              <thead>
-                <tr style={{ textAlign: 'left', color: 'var(--fg-muted)', borderBottom: '1px solid var(--border)' }}>
-                  <th style={{ padding: '8px 4px' }}>Price shock</th>
-                  <th style={{ padding: '8px 4px' }}>Markets at risk</th>
-                  <th style={{ padding: '8px 4px' }}>Debt at risk</th>
-                  <th style={{ padding: '8px 4px' }}>Collateral at risk</th>
-                  <th style={{ padding: '8px 4px' }}>% of TVL</th>
-                </tr>
-              </thead>
-              <tbody>
-                {car.map((c, i) => {
-                  const pctTvl = totalTvl > 0 ? (c.collateral / totalTvl * 100) : 0;
-                  const color = pctTvl > 20 ? 'var(--red)' : pctTvl > 5 ? 'var(--orange)' : 'var(--fg)';
-                  return (
-                    <tr key={i} style={{ borderBottom: '1px solid var(--border-soft)' }}>
-                      <td style={{ padding: '10px 4px', fontWeight: 600 }}>−{c.shockPct}%</td>
-                      <td style={{ padding: '10px 4px' }}>{c.count}</td>
-                      <td style={{ padding: '10px 4px' }}>{fmtUSD(c.debt * 1e6)}</td>
-                      <td style={{ padding: '10px 4px' }}>{fmtUSD(c.collateral * 1e6)}</td>
-                      <td style={{ padding: '10px 4px', color }}>{pctTvl.toFixed(2)}%</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            <div style={{ marginTop: 8, fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
-              Total TVL: {fmtUSD(totalTvl * 1e6, 1)} · methodology baseline pending Monte Carlo (§5)
-            </div>
+            {car.map((c, i) => {
+              const pctTvl = totalTvl > 0 ? (c.collateral / totalTvl * 100) : 0;
+              const color = pctTvl > 20 ? 'var(--red)' : pctTvl > 5 ? 'var(--orange)' : 'var(--green)';
+              return (
+                <div key={i} style={{ display: 'grid', gridTemplateColumns: '90px 1fr 220px', gap: 16, alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--border-soft)' }}>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 15, color: 'var(--fg)' }}>−{c.shockPct}%</div>
+                  <div>
+                    <div style={{ height: 10, background: 'var(--bg-soft)', borderRadius: 5, overflow: 'hidden' }}>
+                      <div style={{ width: `${Math.min(100, Math.max(2, pctTvl))}%`, height: '100%', background: color, transition: 'width 200ms' }} />
+                    </div>
+                    <div style={{ marginTop: 4, display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)' }}>
+                      <span>{c.count} {c.count === 1 ? 'market' : 'markets'} at risk</span>
+                      <span style={{ color }}>{pctTvl.toFixed(2)}% of TVL</span>
+                    </div>
+                  </div>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-muted)', textAlign: 'right' }}>
+                    debt {fmtUSD(c.debt * 1e6, 1)} · collateral {fmtUSD(c.collateral * 1e6, 1)}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -1526,19 +1867,20 @@ function PageRisk() {
         </div>
       </div>
 
-      {/* Asset concentration (HHI) */}
+      {/* Asset concentration — the band chip lives in the header, no inline
+          formula clutter. Methodology is in the tooltip. */}
       <div style={{ marginTop: 16 }}>
         <div className="panel">
           <div className="panel-header">
             <span className="panel-title">
-              <span className="bullet">●</span> Asset concentration (HHI)
-              <span style={{ marginLeft: 12, color: hhiBand.color, fontSize: 11, fontFamily: 'var(--font-mono)' }}>
-                HHI {hhi.toFixed(0)} · {hhiBand.label}
-              </span>
+              <span className="bullet">●</span> Asset concentration
+              <InfoTip>
+                HHI = Σ(share%)² across collateral assets. Bands per the §4 standard:
+                {' '}&gt;2500 highly concentrated, 1500–2500 moderate, ≤1500 diffuse.
+                {' '}Same normalization as the Collateral page so the number matches.
+              </InfoTip>
             </span>
-            <span style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
-              Σ(share%)² · &gt;2500 = highly concentrated
-            </span>
+            <ConcentrationChip hhi={hhi} />
           </div>
           <div className="panel-body">
             <Leaderboard items={Object.entries(supplyByAsset)
@@ -1555,20 +1897,19 @@ function PageRisk() {
   );
 }
 
-// ── §5 Modeling panel ──────────────────────────────────────────────────────
-// Surfaces what `computeRiskModel` returns from the API:
+// ── §5 Modeling panel — visual scorecard ─────────────────────────────────
+// Three visual blocks rather than tables of percentages:
 //
-//   • Headline KPI strip: P(>1% TVL liquidated over 7D), MC 95th-pct LaR,
-//     historical 1D VaR(95%), historical 1D ES(95%).
-//   • VaR / ES table: 95% and 99%, both Historical Simulation and the
-//     parametric Student-t (df=4) heavy-tail variant alongside each other so
-//     a reader can see the heavy-tail premium at a glance.
-//   • Backtest line: actual vs expected violation rate (in/out-of-sample).
-//   • Limitations: the frozen list the backend returns — never sugar-coated.
+//   1. Stress gauge — half-circle dial showing P(>1% TVL liquidated, 7D)
+//      with red/amber/green bands. Reads instantly: "we're in the green".
+//   2. VaR / ES paired bars — Historical vs Heavy-tail side-by-side at 95%
+//      and 99%, so the fat-tail premium is the visible gap between bars.
+//   3. Backtest as colour chips — actual vs expected breach rate per level,
+//      with an "in band / over-breaching / under-breaching" verdict pill.
 //
-// Renders nothing when the backend didn't include riskModel (e.g. old
-// cached payload, missing return series). Failing closed beats a half-drawn
-// risk panel.
+// Every formula, distribution, and seed lives in an InfoTip. Calibration
+// stats + model limitations sit in a collapsed <details> at the bottom for
+// the curious reader. Plain English on the surface, math one hover away.
 function ModeledRiskPanel({ rm }) {
   if (!rm || !rm.var || !rm.monteCarlo) return null;
   const mc = rm.monteCarlo;
@@ -1578,197 +1919,156 @@ function ModeledRiskPanel({ rm }) {
   const bt95 = (rm.backtest || []).find(r => r.level === 0.95);
   const bt99 = (rm.backtest || []).find(r => r.level === 0.99);
 
-  // 1D returns expressed in percent. The model uses log returns; for VaR
-  // display we treat them as percent loss which is accurate to second order
-  // and matches how Basel-style tables are read.
   const pct = (x) => `${(x * 100).toFixed(2)}%`;
   const pctNoSign = (x) => `${Math.abs(x * 100).toFixed(2)}%`;
 
-  // Backtest banding: ratio of actual to expected violations. 0.5×–2× of
-  // expected is "in band" for a 90-day series; outside that suggests the VaR
-  // is mis-calibrated.
+  // Backtest verdict — green when within 0.5×–2× expected, orange/red outside.
   const btBand = (b) => {
     if (!b || !b.observations) return { color: 'var(--fg-muted)', label: 'n/a' };
     const r = b.expectedRate > 0 ? b.violationRate / b.expectedRate : 0;
     if (r >= 0.5 && r <= 2) return { color: 'var(--green)', label: 'in band' };
-    if (r === 0) return { color: 'var(--orange)', label: 'no breaches (small n)' };
+    if (r === 0) return { color: 'var(--orange)', label: 'no breaches' };
     if (r > 2) return { color: 'var(--red)', label: 'over-breaching' };
     return { color: 'var(--orange)', label: 'under-breaching' };
   };
-  const bb95 = btBand(bt95);
-  const bb99 = btBand(bt99);
 
-  // P(>1% TVL liquidated) color band: under 5% = clear, 5-20% = elevated,
-  // above 20% = severe. Same tokens the rest of the dashboard uses.
-  const probColor = mc.probOnePctLiquidated > 0.20 ? 'var(--red)'
+  // Plain-English risk label for the headline gauge. Three bands; ties to
+  // the same thresholds the gauge uses (0.05 / 0.20).
+  const riskLabel = mc.probOnePctLiquidated > 0.20 ? 'severe'
+                  : mc.probOnePctLiquidated > 0.05 ? 'elevated'
+                  : 'low';
+  const riskColor = mc.probOnePctLiquidated > 0.20 ? 'var(--red)'
                   : mc.probOnePctLiquidated > 0.05 ? 'var(--orange)'
                   : 'var(--green)';
+
+  // VaR rows for the paired bars. "a" = Historical, "b" = Heavy-tail.
+  const varRows = [
+    v95 && { label: '95%', a: v95.historical,    b: v95.parametric },
+    v99 && { label: '99%', a: v99.historical,    b: v99.parametric },
+  ].filter(Boolean);
+  const esRows = [
+    v95 && { label: '95%', a: v95.historicalES,  b: v95.parametricES },
+    v99 && { label: '99%', a: v99.historicalES,  b: v99.parametricES },
+  ].filter(Boolean);
 
   return (
     <div style={{ marginTop: 16 }}>
       <div className="panel">
         <div className="panel-header">
           <span className="panel-title">
-            <span className="bullet">●</span> Modeled risk (§5)
-            <span className="info-icon" tabIndex={0}>
-              <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="7" x2="8" y2="11.5"/><circle cx="8" cy="4.8" r="0.4" fill="currentColor"/></svg>
-              <span className="info-tip">
-                Monte Carlo LaR ({mc.paths.toLocaleString()} paths, GBM, {mc.horizonDays}D horizon, σ={pct(mc.assumedAnnualVol)} annualized) +
-                VaR ensemble (Historical Simulation + Student-t df=4) + Expected Shortfall + in/out-of-sample backtest.
-                Calibrated on {hist.observations}D of sector-TVL log returns.
-              </span>
-            </span>
+            <span className="bullet">●</span> Modeled risk over the next 7 days
+            <InfoTip>
+              Monte Carlo on collateral price paths ({mc.paths.toLocaleString()} paths,
+              GBM, {mc.horizonDays}-day horizon, σ ≈ {pct(mc.assumedAnnualVol)} annualized)
+              tracking per-market Health Factor. VaR ensemble combines Historical Simulation
+              (no distribution assumption) with parametric Student-t df=4 (heavy-tail).
+              Expected Shortfall is the average loss in the worst tail. Backtest splits the
+              {' '}{hist.observations}D return series 50/50 in-sample vs out-of-sample.
+            </InfoTip>
           </span>
           <span style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
-            seed {rm.meta?.seed?.toString(16) || '?'} · {mc.paths.toLocaleString()} paths
+            {mc.paths.toLocaleString()} simulated paths · {mc.horizonDays}D horizon
           </span>
         </div>
         <div className="panel-body">
-          {/* Headline KPI strip — four numbers a portfolio manager would want first */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
-            <div className="kpi" style={{ padding: 12 }}>
-              <div style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
-                P(&gt;1% TVL liquidated, 7D)
+          {/* ── Top row: Stress gauge + key stat tiles ────────────── */}
+          <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: 24, alignItems: 'center', marginBottom: 18 }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', marginBottom: 4 }}>
+                Probability of &gt;1% TVL liquidated
               </div>
-              <div style={{ fontSize: 22, fontWeight: 600, color: probColor, fontFamily: 'var(--font-mono)', marginTop: 4 }}>
-                {pct(mc.probOnePctLiquidated)}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
-                Monte Carlo
+              <Gauge value={mc.probOnePctLiquidated} bands={[0.05, 0.20]} width={240} height={130} />
+              <div style={{ marginTop: 4, fontFamily: 'var(--font-mono)', fontSize: 12, color: riskColor, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.6 }}>
+                {riskLabel}
               </div>
             </div>
-            <div className="kpi" style={{ padding: 12 }}>
-              <div style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
-                95th-pct LaR (7D)
-              </div>
-              <div style={{ fontSize: 22, fontWeight: 600, fontFamily: 'var(--font-mono)', marginTop: 4 }}>
-                {pct(mc.laR95)}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
-                of sector TVL
-              </div>
-            </div>
-            <div className="kpi" style={{ padding: 12 }}>
-              <div style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
-                VaR(95%) · 1D
-              </div>
-              <div style={{ fontSize: 22, fontWeight: 600, fontFamily: 'var(--font-mono)', marginTop: 4 }}>
-                {v95 ? pctNoSign(v95.historical) : '—'}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
-                Historical Simulation
-              </div>
-            </div>
-            <div className="kpi" style={{ padding: 12 }}>
-              <div style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
-                ES(95%) · 1D
-              </div>
-              <div style={{ fontSize: 22, fontWeight: 600, fontFamily: 'var(--font-mono)', marginTop: 4 }}>
-                {v95 ? pctNoSign(v95.historicalES) : '—'}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
-                tail-mean loss
-              </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+              <MiniStat label="Worst-case 7D loss (95%)" value={pct(mc.laR95)}
+                sub="of sector TVL" />
+              <MiniStat label="Worst-case 7D loss (99%)" value={pct(mc.laR99)}
+                sub="tail scenario" />
+              <MiniStat label="Time to first liquidation" value={mc.expectedTimingDays != null ? `${mc.expectedTimingDays.toFixed(1)} d` : '—'}
+                sub="conditional mean" />
+              <MiniStat label="Sector volatility (realised)" value={pct(hist.annualizedVol || 0)}
+                sub={`${hist.observations}D window`} />
+              <MiniStat label="Best 1D return" value={pct(hist.maxReturn || 0)}
+                color="var(--green)" sub="recent history" />
+              <MiniStat label="Worst 1D return" value={pct(hist.minReturn || 0)}
+                color="var(--red)" sub="recent history" />
             </div>
           </div>
 
-          {/* VaR / ES table — historical + parametric heavy-tail, 1-day horizon */}
-          <div style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', marginBottom: 4 }}>
-            VaR / Expected Shortfall · 1-day horizon · loss as % of sector TVL
-          </div>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-mono)', fontSize: 13 }}>
-            <thead>
-              <tr style={{ textAlign: 'left', color: 'var(--fg-muted)', borderBottom: '1px solid var(--border)' }}>
-                <th style={{ padding: '8px 4px' }}>Confidence</th>
-                <th style={{ padding: '8px 4px', textAlign: 'right' }}>VaR (Historical)</th>
-                <th style={{ padding: '8px 4px', textAlign: 'right' }}>VaR (Student-t df=4)</th>
-                <th style={{ padding: '8px 4px', textAlign: 'right' }}>ES (Historical)</th>
-                <th style={{ padding: '8px 4px', textAlign: 'right' }}>ES (Student-t df=4)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[v95, v99].filter(Boolean).map((row) => (
-                <tr key={row.level} style={{ borderBottom: '1px solid var(--border-soft)' }}>
-                  <td style={{ padding: '10px 4px', fontWeight: 600 }}>{pct(row.level)}</td>
-                  <td style={{ padding: '10px 4px', textAlign: 'right' }}>{pctNoSign(row.historical)}</td>
-                  <td style={{ padding: '10px 4px', textAlign: 'right' }}>{pctNoSign(row.parametric)}</td>
-                  <td style={{ padding: '10px 4px', textAlign: 'right' }}>{pctNoSign(row.historicalES)}</td>
-                  <td style={{ padding: '10px 4px', textAlign: 'right' }}>{pctNoSign(row.parametricES)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div style={{ marginTop: 6, fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
-            ↪ Heavy-tail (Student-t df=4) typically reports a larger loss than Historical at the same confidence — the gap is the "fat-tail premium". When the two are close, the recent history already contains the tail observation you'd hedge for.
-          </div>
-
-          {/* Backtest line */}
-          <div style={{ marginTop: 16, fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
-            Backtest (in-sample VaR, out-of-sample evaluation)
-          </div>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-mono)', fontSize: 13, marginTop: 4 }}>
-            <thead>
-              <tr style={{ textAlign: 'left', color: 'var(--fg-muted)', borderBottom: '1px solid var(--border)' }}>
-                <th style={{ padding: '8px 4px' }}>Confidence</th>
-                <th style={{ padding: '8px 4px', textAlign: 'right' }}>Expected breaches</th>
-                <th style={{ padding: '8px 4px', textAlign: 'right' }}>Actual breaches</th>
-                <th style={{ padding: '8px 4px', textAlign: 'right' }}>Actual rate</th>
-                <th style={{ padding: '8px 4px', textAlign: 'right' }}>Expected rate</th>
-                <th style={{ padding: '8px 4px' }}>Verdict</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[
-                { row: bt95, band: bb95 },
-                { row: bt99, band: bb99 },
-              ].filter(x => x.row).map(({ row, band }) => (
-                <tr key={row.level} style={{ borderBottom: '1px solid var(--border-soft)' }}>
-                  <td style={{ padding: '10px 4px', fontWeight: 600 }}>{pct(row.level)}</td>
-                  <td style={{ padding: '10px 4px', textAlign: 'right' }}>{row.expectedViolations.toFixed(2)}</td>
-                  <td style={{ padding: '10px 4px', textAlign: 'right' }}>{row.actualViolations}</td>
-                  <td style={{ padding: '10px 4px', textAlign: 'right' }}>{pct(row.violationRate)}</td>
-                  <td style={{ padding: '10px 4px', textAlign: 'right' }}>{pct(row.expectedRate)}</td>
-                  <td style={{ padding: '10px 4px', color: band.color }}>{band.label}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          {/* Monte Carlo summary */}
-          <div style={{ marginTop: 16, fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
-            Monte Carlo summary
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginTop: 4, fontFamily: 'var(--font-mono)', fontSize: 13 }}>
+          {/* ── Middle row: VaR + ES as paired horizontal bars ───── */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 18 }}>
             <div>
-              <div style={{ color: 'var(--fg-muted)', fontSize: 11 }}>P(&gt;1% liquidated, 7D)</div>
-              <div style={{ fontWeight: 600, marginTop: 2 }}>{pct(mc.probOnePctLiquidated)}</div>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>
+                Value at Risk (1-day)
+                <InfoTip>
+                  VaR = the daily loss the sector is unlikely to exceed at the chosen
+                  confidence. 95% VaR of 2% means "on a normal-bad day TVL drops at most
+                  2%". Historical uses the empirical return distribution. Heavy-tail uses
+                  Student-t df=4 to penalise extreme moves more — useful when recent
+                  history hasn't yet seen the tail.
+                </InfoTip>
+              </div>
+              <PairedBars rows={varRows}
+                aLabel="Historical" bLabel="Heavy-tail (Student-t)"
+                aColor="var(--blue)" bColor="var(--orange)"
+                width={420}
+                formatter={(v) => pctNoSign(v)} />
             </div>
             <div>
-              <div style={{ color: 'var(--fg-muted)', fontSize: 11 }}>95% LaR (7D)</div>
-              <div style={{ fontWeight: 600, marginTop: 2 }}>{pct(mc.laR95)}</div>
-            </div>
-            <div>
-              <div style={{ color: 'var(--fg-muted)', fontSize: 11 }}>99% LaR (7D)</div>
-              <div style={{ fontWeight: 600, marginTop: 2 }}>{pct(mc.laR99)}</div>
-            </div>
-            <div>
-              <div style={{ color: 'var(--fg-muted)', fontSize: 11 }}>E[time to first liq | liq]</div>
-              <div style={{ fontWeight: 600, marginTop: 2 }}>
-                {mc.expectedTimingDays != null ? `${mc.expectedTimingDays.toFixed(1)}d` : '—'}
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>
+                Expected Shortfall (1-day)
+                <InfoTip>
+                  Expected Shortfall (CVaR) is the average loss <em>given</em> we exceed VaR
+                  — what happens "when things actually go bad". Always ≥ VaR. A big gap
+                  between VaR and ES means the tail is thick: when losses arrive they tend
+                  to be much worse than the threshold.
+                </InfoTip>
               </div>
+              <PairedBars rows={esRows}
+                aLabel="Historical" bLabel="Heavy-tail (Student-t)"
+                aColor="var(--blue)" bColor="var(--orange)"
+                width={420}
+                formatter={(v) => pctNoSign(v)} />
             </div>
           </div>
 
-          {/* Calibration footnote */}
-          <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border-soft)', fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
-            Calibration: {hist.observations || 0} daily observations · realized σ = {pct(hist.annualizedVol || 0)} annualized · realized μ = {pct(hist.annualizedReturn || 0)}/yr ·
-            min 1D = {pct(hist.minReturn || 0)} · max 1D = {pct(hist.maxReturn || 0)}
+          {/* ── Bottom row: Backtest verdict chips ─────────────── */}
+          <div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>
+              Backtest
+              <InfoTip>
+                Out-of-sample check on the VaR model. We estimate VaR on the first half of
+                the return series and count how many days in the second half breached it.
+                A well-calibrated 95% VaR should breach about 5% of out-of-sample days, 99%
+                VaR about 1%. Anything 0.5×–2× of expected is "in band" for our short window.
+              </InfoTip>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
+              {[bt95, bt99].filter(Boolean).map((b) => {
+                const band = btBand(b);
+                return (
+                  <div key={b.level} style={{ padding: '10px 14px', border: `1px solid ${band.color}`, borderRadius: 6, display: 'grid', gridTemplateColumns: '90px 1fr auto', gap: 14, alignItems: 'center' }}>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 14 }}>{pct(b.level)}</div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-muted)' }}>
+                      <div>{b.actualViolations} of {b.observations} days breached <span style={{ color: 'var(--fg-dim)' }}>(expected ≈ {b.expectedViolations.toFixed(1)})</span></div>
+                      <div>actual {pct(b.violationRate)} <span style={{ color: 'var(--fg-dim)' }}>vs expected {pct(b.expectedRate)}</span></div>
+                    </div>
+                    <div style={{ padding: '4px 10px', borderRadius: 10, background: band.color, color: 'white', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                      {band.label}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
-          {/* Limitations — verbatim from backend; non-negotiable */}
-          <details style={{ marginTop: 12 }}>
+          {/* Limitations — collapsed by default. Curious readers can open. */}
+          <details style={{ marginTop: 18, paddingTop: 12, borderTop: '1px solid var(--border-soft)' }}>
             <summary style={{ fontSize: 12, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', cursor: 'pointer' }}>
-              Model limitations ({(rm.limitations || []).length})
+              Model assumptions &amp; limitations ({(rm.limitations || []).length})
             </summary>
             <ul style={{ marginTop: 8, paddingLeft: 18, fontSize: 12, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', lineHeight: 1.5 }}>
               {(rm.limitations || []).map((l, i) => (
