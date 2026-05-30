@@ -187,6 +187,17 @@ function ChartPanel({
   description,
   className = '',
   render,
+  // Per §6: every chart carries CSV export + deep-link/share. Callers pass a
+  // csvBuilder({proto, metric, timeframe}) → rows; the toolbar's CSV button
+  // calls it and downloads. shareId is a stable identifier embedded in the
+  // copied URL so the recipient lands back at the same chart state.
+  csvBuilder,
+  shareId,
+  // Per §6.Insight rules: "Every panel pairs with a one-line auto-insight
+  // that answers 'so what,' tied to a decision." Callers pass either a
+  // string or an insight({ proto, metric, timeframe }) → string function;
+  // the panel renders it as a footer below the chart body.
+  insight,
 }) {
   const initialProto = defaultProto != null
     ? defaultProto
@@ -250,6 +261,37 @@ function ChartPanel({
             {protocolMode === 'multi' && (
               <Dropdown label="Protocol" multi selected={proto} items={protoItemsMulti} onChange={setProto} />
             )}
+            {csvBuilder && (
+              <button className="icon-btn" title="Export CSV"
+                onClick={() => {
+                  try {
+                    const rows = csvBuilder({ proto, metric, timeframe });
+                    if (rows && rows.length) {
+                      const slug = resolvedTitle.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+                      exportCSV(rows, `${slug}.csv`);
+                    } else {
+                      alert('No rows to export for current selection.');
+                    }
+                  } catch (e) { console.error('csv export failed:', e); alert('CSV export failed: ' + (e?.message || e)); }
+                }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/>
+                </svg>
+              </button>
+            )}
+            {shareId && (
+              <button className="icon-btn" title="Copy share link"
+                onClick={() => copyShareLink(shareId, {
+                  ...(Array.isArray(proto) ? { proto: proto.join(',') } : (proto ? { proto } : {})),
+                  ...(metric ? { metric } : {}),
+                  ...(timeframe ? { tf: String(timeframe) } : {}),
+                })}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/>
+                  <line x1="8.2" y1="10.8" x2="15.8" y2="7.2"/><line x1="8.2" y1="13.2" x2="15.8" y2="16.8"/>
+                </svg>
+              </button>
+            )}
             <button className="icon-btn" title="Snapshot to PNG"
               onClick={() => snapshotPanel(ref.current, `${resolvedTitle.replace(/[^a-z0-9]+/gi,'-').toLowerCase()}.png`)}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="6" width="18" height="14" rx="2"/><circle cx="12" cy="13" r="3.5"/><path d="M8 6l1.5-2h5L16 6"/></svg>
@@ -260,6 +302,22 @@ function ChartPanel({
           </div>
         </div>
         <div className="panel-body">{render({ proto, metric, size: 'normal', timeframe })}</div>
+        {insight && (() => {
+          let text = '';
+          try { text = typeof insight === 'function' ? insight({ proto, metric, timeframe }) : insight; }
+          catch (e) { console.warn('insight compute failed:', e); text = ''; }
+          if (!text) return null;
+          // Footer per §6 Insight Rules — decision-linked "so what" line.
+          return (
+            <div style={{
+              padding: '8px 16px 12px', borderTop: '1px solid var(--border-soft)',
+              fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.4,
+            }}>
+              <span style={{ color: 'var(--orange)', marginRight: 6 }}>↪</span>
+              {text}
+            </div>
+          );
+        })()}
       </div>
       <ExpandModal open={expanded} onClose={() => setExpanded(false)} title={resolvedTitle}>
         {render({ proto, metric, size: 'expanded', timeframe })}
@@ -313,6 +371,30 @@ function PageOverview() {
           className="col-8"
           protocolMode="multi"
           description="Stacked time series of total value locked across the selected protocols. Switch the Data dropdown to see Supplied, Borrowed, or Revenue instead. Use the timeframe toggle to zoom between 7, 30, and 90 days."
+          shareId="overview.tvl-by-protocol"
+          insight={({ proto, metric, timeframe }) => {
+            const sel = D.protocols.filter(p => proto.includes(p.id));
+            if (sel.length === 0) return 'Select at least one protocol to see the trend.';
+            const src = D.tvlMetricSeries[metric] || D.tvlSeries;
+            const totals = sel.map(p => src[D.protocols.indexOf(p)].slice(-timeframe));
+            const lastTotal = totals.reduce((s, ser) => s + (ser[ser.length-1]?.value || 0), 0);
+            const firstTotal = totals.reduce((s, ser) => s + (ser[0]?.value || 0), 0);
+            const chgPct = firstTotal > 0 ? ((lastTotal - firstTotal) / firstTotal * 100) : 0;
+            const dir = chgPct > 1 ? 'rising' : chgPct < -1 ? 'falling' : 'flat';
+            // Decision: monitor sector trend; widen/narrow risk overlays if sharp move.
+            return `Sector ${metric} ${dir} ${Math.abs(chgPct).toFixed(1)}% over ${timeframe}D — current $${lastTotal.toFixed(1)}M across ${sel.length} protocols. Re-run risk overlays if Δ > 20%.`;
+          }}
+          csvBuilder={({ proto, metric, timeframe }) => {
+            const src = D.tvlMetricSeries[metric] || D.tvlSeries;
+            const rows = [];
+            for (const p of D.protocols.filter(pp => proto.includes(pp.id))) {
+              const series = src[D.protocols.indexOf(p)].slice(-timeframe);
+              series.forEach((point, i) => {
+                rows.push({ day_offset: i - (series.length - 1), protocol: p.id, metric, value_M_usd: point.value.toFixed(4) });
+              });
+            }
+            return rows;
+          }}
           metricItems={[
             { id: 'tvl',     label: 'TVL' },
             { id: 'supply',  label: 'Supplied' },
@@ -341,6 +423,24 @@ function PageOverview() {
           className="col-4"
           protocolMode="none"
           description="Treemap of each protocol's share of today's total. Tile area is proportional to the protocol's value for the chosen metric — switch between TVL, Supplied, and Borrowed to see how the mix shifts. Hover any tile for exact value and percentage share."
+          shareId="overview.protocol-mix"
+          insight={({ metric }) => {
+            const items = D.protocols.map(p => {
+              const m = D.protocolMetrics.find(x => x.id === p.id);
+              return { id: p.id, name: p.name, value: m[metric] || m.tvl };
+            }).sort((a, b) => b.value - a.value);
+            const total = items.reduce((s, x) => s + x.value, 0);
+            if (total === 0 || items.length === 0) return '';
+            const top1Pct = items[0].value / total * 100;
+            const top2Pct = items.slice(0, 2).reduce((s, x) => s + x.value, 0) / total * 100;
+            const concentration = top1Pct > 60 ? 'highly concentrated' : top1Pct > 40 ? 'concentrated' : 'diffuse';
+            // Decision: concentration changes signal where to focus protocol-specific risk overlays.
+            return `${items[0].name} leads at ${top1Pct.toFixed(0)}%; top 2 = ${top2Pct.toFixed(0)}%. Mix is ${concentration} — focus risk overlays on ${items[0].name}.`;
+          }}
+          csvBuilder={({ metric }) => D.protocols.map(p => {
+            const m = D.protocolMetrics.find(x => x.id === p.id);
+            return { protocol: p.id, metric, value_M_usd: (m[metric] || m.tvl).toFixed(4) };
+          })}
           metricItems={[
             { id: 'tvl',    label: 'By TVL' },
             { id: 'supply', label: 'By Supplied' },
@@ -371,6 +471,27 @@ function PageOverview() {
           title="Daily Flows"
           protocolMode="none"
           description="Daily $-volume of supply deposits, borrow draws, and liquidation repayments aggregated across all 5 protocols. Stacked bars show the mix on each day; the tooltip's TOTAL line tells you total daily activity. Filter to a single flow type via the Data dropdown."
+          shareId="overview.daily-flows"
+          insight={({ timeframe }) => {
+            const sliced = D.volumeSeries.slice(-timeframe);
+            const sumSup = sliced.reduce((s, d) => s + (d.supply || 0), 0);
+            const sumBor = sliced.reduce((s, d) => s + (d.borrow || 0), 0);
+            const sumLiq = sliced.reduce((s, d) => s + (d.liquid || 0), 0);
+            const liqShare = sumBor > 0 ? (sumLiq / sumBor * 100) : 0;
+            const liqFlag = liqShare > 5 ? '⚠ elevated liquidation share' : 'liquidation share normal';
+            // Decision: spike in liquidation share = follow up on Risk page; quiet flows = check
+            // protocol incentive efficiency on Revenue page.
+            return `${timeframe}D total: supply $${sumSup.toFixed(0)}M, borrow $${sumBor.toFixed(0)}M, liq $${sumLiq.toFixed(1)}M (${liqShare.toFixed(2)}% of borrows) — ${liqFlag}.`;
+          }}
+          csvBuilder={({ metric, timeframe }) => {
+            const sliced = D.volumeSeries.slice(-timeframe);
+            return sliced.map((d, i) => ({
+              day_offset: i - (sliced.length - 1),
+              supply_M_usd: (d.supply || 0).toFixed(4),
+              borrow_M_usd: (d.borrow || 0).toFixed(4),
+              liquidations_M_usd: (d.liquid || 0).toFixed(4),
+            }));
+          }}
           metricItems={[
             { id: 'all',     label: 'All flows' },
             { id: 'supply',  label: 'Supply only' },
