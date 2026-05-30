@@ -1548,7 +1548,237 @@ function PageRisk() {
           </div>
         </div>
       </div>
+
+      {/* ── Modeled risk (§5: Monte Carlo + VaR ensemble + ES + backtest) ── */}
+      <ModeledRiskPanel rm={D.riskModel} />
     </PageShell>
+  );
+}
+
+// ── §5 Modeling panel ──────────────────────────────────────────────────────
+// Surfaces what `computeRiskModel` returns from the API:
+//
+//   • Headline KPI strip: P(>1% TVL liquidated over 7D), MC 95th-pct LaR,
+//     historical 1D VaR(95%), historical 1D ES(95%).
+//   • VaR / ES table: 95% and 99%, both Historical Simulation and the
+//     parametric Student-t (df=4) heavy-tail variant alongside each other so
+//     a reader can see the heavy-tail premium at a glance.
+//   • Backtest line: actual vs expected violation rate (in/out-of-sample).
+//   • Limitations: the frozen list the backend returns — never sugar-coated.
+//
+// Renders nothing when the backend didn't include riskModel (e.g. old
+// cached payload, missing return series). Failing closed beats a half-drawn
+// risk panel.
+function ModeledRiskPanel({ rm }) {
+  if (!rm || !rm.var || !rm.monteCarlo) return null;
+  const mc = rm.monteCarlo;
+  const hist = rm.history || {};
+  const v95 = rm.var.find(r => r.level === 0.95);
+  const v99 = rm.var.find(r => r.level === 0.99);
+  const bt95 = (rm.backtest || []).find(r => r.level === 0.95);
+  const bt99 = (rm.backtest || []).find(r => r.level === 0.99);
+
+  // 1D returns expressed in percent. The model uses log returns; for VaR
+  // display we treat them as percent loss which is accurate to second order
+  // and matches how Basel-style tables are read.
+  const pct = (x) => `${(x * 100).toFixed(2)}%`;
+  const pctNoSign = (x) => `${Math.abs(x * 100).toFixed(2)}%`;
+
+  // Backtest banding: ratio of actual to expected violations. 0.5×–2× of
+  // expected is "in band" for a 90-day series; outside that suggests the VaR
+  // is mis-calibrated.
+  const btBand = (b) => {
+    if (!b || !b.observations) return { color: 'var(--fg-muted)', label: 'n/a' };
+    const r = b.expectedRate > 0 ? b.violationRate / b.expectedRate : 0;
+    if (r >= 0.5 && r <= 2) return { color: 'var(--green)', label: 'in band' };
+    if (r === 0) return { color: 'var(--orange)', label: 'no breaches (small n)' };
+    if (r > 2) return { color: 'var(--red)', label: 'over-breaching' };
+    return { color: 'var(--orange)', label: 'under-breaching' };
+  };
+  const bb95 = btBand(bt95);
+  const bb99 = btBand(bt99);
+
+  // P(>1% TVL liquidated) color band: under 5% = clear, 5-20% = elevated,
+  // above 20% = severe. Same tokens the rest of the dashboard uses.
+  const probColor = mc.probOnePctLiquidated > 0.20 ? 'var(--red)'
+                  : mc.probOnePctLiquidated > 0.05 ? 'var(--orange)'
+                  : 'var(--green)';
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div className="panel">
+        <div className="panel-header">
+          <span className="panel-title">
+            <span className="bullet">●</span> Modeled risk (§5)
+            <span className="info-icon" tabIndex={0}>
+              <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="7" x2="8" y2="11.5"/><circle cx="8" cy="4.8" r="0.4" fill="currentColor"/></svg>
+              <span className="info-tip">
+                Monte Carlo LaR ({mc.paths.toLocaleString()} paths, GBM, {mc.horizonDays}D horizon, σ={pct(mc.assumedAnnualVol)} annualized) +
+                VaR ensemble (Historical Simulation + Student-t df=4) + Expected Shortfall + in/out-of-sample backtest.
+                Calibrated on {hist.observations}D of sector-TVL log returns.
+              </span>
+            </span>
+          </span>
+          <span style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
+            seed {rm.meta?.seed?.toString(16) || '?'} · {mc.paths.toLocaleString()} paths
+          </span>
+        </div>
+        <div className="panel-body">
+          {/* Headline KPI strip — four numbers a portfolio manager would want first */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
+            <div className="kpi" style={{ padding: 12 }}>
+              <div style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
+                P(&gt;1% TVL liquidated, 7D)
+              </div>
+              <div style={{ fontSize: 22, fontWeight: 600, color: probColor, fontFamily: 'var(--font-mono)', marginTop: 4 }}>
+                {pct(mc.probOnePctLiquidated)}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
+                Monte Carlo
+              </div>
+            </div>
+            <div className="kpi" style={{ padding: 12 }}>
+              <div style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
+                95th-pct LaR (7D)
+              </div>
+              <div style={{ fontSize: 22, fontWeight: 600, fontFamily: 'var(--font-mono)', marginTop: 4 }}>
+                {pct(mc.laR95)}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
+                of sector TVL
+              </div>
+            </div>
+            <div className="kpi" style={{ padding: 12 }}>
+              <div style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
+                VaR(95%) · 1D
+              </div>
+              <div style={{ fontSize: 22, fontWeight: 600, fontFamily: 'var(--font-mono)', marginTop: 4 }}>
+                {v95 ? pctNoSign(v95.historical) : '—'}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
+                Historical Simulation
+              </div>
+            </div>
+            <div className="kpi" style={{ padding: 12 }}>
+              <div style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
+                ES(95%) · 1D
+              </div>
+              <div style={{ fontSize: 22, fontWeight: 600, fontFamily: 'var(--font-mono)', marginTop: 4 }}>
+                {v95 ? pctNoSign(v95.historicalES) : '—'}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
+                tail-mean loss
+              </div>
+            </div>
+          </div>
+
+          {/* VaR / ES table — historical + parametric heavy-tail, 1-day horizon */}
+          <div style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', marginBottom: 4 }}>
+            VaR / Expected Shortfall · 1-day horizon · loss as % of sector TVL
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-mono)', fontSize: 13 }}>
+            <thead>
+              <tr style={{ textAlign: 'left', color: 'var(--fg-muted)', borderBottom: '1px solid var(--border)' }}>
+                <th style={{ padding: '8px 4px' }}>Confidence</th>
+                <th style={{ padding: '8px 4px', textAlign: 'right' }}>VaR (Historical)</th>
+                <th style={{ padding: '8px 4px', textAlign: 'right' }}>VaR (Student-t df=4)</th>
+                <th style={{ padding: '8px 4px', textAlign: 'right' }}>ES (Historical)</th>
+                <th style={{ padding: '8px 4px', textAlign: 'right' }}>ES (Student-t df=4)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[v95, v99].filter(Boolean).map((row) => (
+                <tr key={row.level} style={{ borderBottom: '1px solid var(--border-soft)' }}>
+                  <td style={{ padding: '10px 4px', fontWeight: 600 }}>{pct(row.level)}</td>
+                  <td style={{ padding: '10px 4px', textAlign: 'right' }}>{pctNoSign(row.historical)}</td>
+                  <td style={{ padding: '10px 4px', textAlign: 'right' }}>{pctNoSign(row.parametric)}</td>
+                  <td style={{ padding: '10px 4px', textAlign: 'right' }}>{pctNoSign(row.historicalES)}</td>
+                  <td style={{ padding: '10px 4px', textAlign: 'right' }}>{pctNoSign(row.parametricES)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ marginTop: 6, fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
+            ↪ Heavy-tail (Student-t df=4) typically reports a larger loss than Historical at the same confidence — the gap is the "fat-tail premium". When the two are close, the recent history already contains the tail observation you'd hedge for.
+          </div>
+
+          {/* Backtest line */}
+          <div style={{ marginTop: 16, fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
+            Backtest (in-sample VaR, out-of-sample evaluation)
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-mono)', fontSize: 13, marginTop: 4 }}>
+            <thead>
+              <tr style={{ textAlign: 'left', color: 'var(--fg-muted)', borderBottom: '1px solid var(--border)' }}>
+                <th style={{ padding: '8px 4px' }}>Confidence</th>
+                <th style={{ padding: '8px 4px', textAlign: 'right' }}>Expected breaches</th>
+                <th style={{ padding: '8px 4px', textAlign: 'right' }}>Actual breaches</th>
+                <th style={{ padding: '8px 4px', textAlign: 'right' }}>Actual rate</th>
+                <th style={{ padding: '8px 4px', textAlign: 'right' }}>Expected rate</th>
+                <th style={{ padding: '8px 4px' }}>Verdict</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                { row: bt95, band: bb95 },
+                { row: bt99, band: bb99 },
+              ].filter(x => x.row).map(({ row, band }) => (
+                <tr key={row.level} style={{ borderBottom: '1px solid var(--border-soft)' }}>
+                  <td style={{ padding: '10px 4px', fontWeight: 600 }}>{pct(row.level)}</td>
+                  <td style={{ padding: '10px 4px', textAlign: 'right' }}>{row.expectedViolations.toFixed(2)}</td>
+                  <td style={{ padding: '10px 4px', textAlign: 'right' }}>{row.actualViolations}</td>
+                  <td style={{ padding: '10px 4px', textAlign: 'right' }}>{pct(row.violationRate)}</td>
+                  <td style={{ padding: '10px 4px', textAlign: 'right' }}>{pct(row.expectedRate)}</td>
+                  <td style={{ padding: '10px 4px', color: band.color }}>{band.label}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {/* Monte Carlo summary */}
+          <div style={{ marginTop: 16, fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
+            Monte Carlo summary
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginTop: 4, fontFamily: 'var(--font-mono)', fontSize: 13 }}>
+            <div>
+              <div style={{ color: 'var(--fg-muted)', fontSize: 11 }}>P(&gt;1% liquidated, 7D)</div>
+              <div style={{ fontWeight: 600, marginTop: 2 }}>{pct(mc.probOnePctLiquidated)}</div>
+            </div>
+            <div>
+              <div style={{ color: 'var(--fg-muted)', fontSize: 11 }}>95% LaR (7D)</div>
+              <div style={{ fontWeight: 600, marginTop: 2 }}>{pct(mc.laR95)}</div>
+            </div>
+            <div>
+              <div style={{ color: 'var(--fg-muted)', fontSize: 11 }}>99% LaR (7D)</div>
+              <div style={{ fontWeight: 600, marginTop: 2 }}>{pct(mc.laR99)}</div>
+            </div>
+            <div>
+              <div style={{ color: 'var(--fg-muted)', fontSize: 11 }}>E[time to first liq | liq]</div>
+              <div style={{ fontWeight: 600, marginTop: 2 }}>
+                {mc.expectedTimingDays != null ? `${mc.expectedTimingDays.toFixed(1)}d` : '—'}
+              </div>
+            </div>
+          </div>
+
+          {/* Calibration footnote */}
+          <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border-soft)', fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
+            Calibration: {hist.observations || 0} daily observations · realized σ = {pct(hist.annualizedVol || 0)} annualized · realized μ = {pct(hist.annualizedReturn || 0)}/yr ·
+            min 1D = {pct(hist.minReturn || 0)} · max 1D = {pct(hist.maxReturn || 0)}
+          </div>
+
+          {/* Limitations — verbatim from backend; non-negotiable */}
+          <details style={{ marginTop: 12 }}>
+            <summary style={{ fontSize: 12, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', cursor: 'pointer' }}>
+              Model limitations ({(rm.limitations || []).length})
+            </summary>
+            <ul style={{ marginTop: 8, paddingLeft: 18, fontSize: 12, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', lineHeight: 1.5 }}>
+              {(rm.limitations || []).map((l, i) => (
+                <li key={i} style={{ marginBottom: 6 }}>{l}</li>
+              ))}
+            </ul>
+          </details>
+        </div>
+      </div>
+    </div>
   );
 }
 
