@@ -914,6 +914,53 @@ function computeIntegrityGates(inputs: IntegrityInputs): IntegrityGate[] {
     });
   }
 
+  // 8. Outlier-row sanity check.
+  //
+  // Catches a class of bug we hit twice already: a single market row whose
+  // USD value is implausibly large relative to either the protocol's own
+  // reference TVL or the rest of the same protocol's rows. Most recent
+  // case — Bucket's BKT-AF-AFSUI-SUI row reading $1.46B because the
+  // Aftermath LP unwrapping math was missing the coin-decimal scaling. A
+  // human eyeballing the chart caught it; this gate makes the next one
+  // visible without needing eyeballs.
+  //
+  // Rule of thumb for the two thresholds:
+  //   • absolute floor: $200M is larger than every legitimate single market
+  //     across all 5 protocols today, by a large margin.
+  //   • relative floor: any row > 80% of its protocol's headline TVL is
+  //     suspicious — even highly-concentrated protocols don't put 80%+ of
+  //     their book into one market.
+  // Either trigger flags 'warn' so the publication gate stops short of
+  // 'fail' (we want the chart to render with the bad row called out, not
+  // disappear entirely).
+  {
+    const ABS_FLOOR_USD_M = 200; // $M
+    const REL_FLOOR_PCT = 0.80;
+    const violators: string[] = [];
+    for (const r of allRows) {
+      const sup = num(r.supply ?? r.collateralUsd);
+      if (sup < ABS_FLOOR_USD_M) {
+        // Absolute floor cleared. Check relative.
+        const proto = String(r.protocol);
+        const headlineRow = inputs.protocolMetrics.find(p => p.id === proto);
+        if (!headlineRow || headlineRow.tvl <= 0) continue;
+        if (sup > headlineRow.tvl * REL_FLOOR_PCT) {
+          violators.push(`${proto}/${r.sym ?? r.asset ?? '?'} $${sup.toFixed(1)}M (${((sup / headlineRow.tvl) * 100).toFixed(0)}% of ${proto} TVL)`);
+        }
+      } else {
+        violators.push(`${r.protocol}/${r.sym ?? r.asset ?? '?'} $${sup.toFixed(1)}M (> $${ABS_FLOOR_USD_M}M floor)`);
+      }
+    }
+    gates.push({
+      id: 'outlier_row',
+      label: 'Outlier-row sanity (single market < $200M and < 80% of protocol TVL)',
+      status: violators.length === 0 ? 'pass' : 'warn',
+      detail: violators.length === 0
+        ? `${allRows.length} markets within sanity bounds`
+        : `${violators.length} outlier(s): ${violators.slice(0, 3).join('; ')}${violators.length > 3 ? '…' : ''}`,
+    });
+  }
+
   return gates;
 }
 

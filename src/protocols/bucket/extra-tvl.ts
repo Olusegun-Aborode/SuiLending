@@ -411,18 +411,33 @@ async function walkAfsuiSuiBucket(prices: Record<string, number>): Promise<Norma
   const lpSupply = num(nested(fPool, 'lp_supply', 'value'));
   const balances = (fPool.normalized_balances as Array<string | number> | undefined) ?? [];
   const tokenNames = (fPool.type_names as string[] | undefined) ?? [];
+  // Aftermath stores per-coin decimals on the pool itself. Required to
+  // convert the 1e18-normalized balances back to human token amounts —
+  // the previous version of this walk skipped this step and over-stated
+  // the AFSUI/SUI vault by 1e9× (every SUI/afSUI is 9 decimals), which
+  // pushed BKT-AF-AFSUI-SUI to ~$1.46B and the protocol total to $1.49B.
+  const coinDecimals = (fPool.coin_decimals as Array<number | string> | undefined) ?? [];
   const stakedInBucket = num(fBucket.collateral_vault);
   if (lpSupply <= 0 || stakedInBucket <= 0 || balances.length < 2) return [];
 
   // DefiLlama uses Math.floor on the percentages which truncates to 0 on
   // small ratios (lp_supply > balances). We avoid the floor and keep the
   // ratio in floating-point to capture small-but-non-zero positions.
+  //
+  // Conversion chain (verified against the on-chain pool object):
+  //   raw normalized = balance              (Aftermath stores this with the
+  //                                          1e18 normalization factor baked in)
+  //   raw token      = balance / 1e18       (undo the Aftermath normalization)
+  //   human token    = raw / 10^decimals    (undo the coin's own decimals)
+  // Then scale by our share of the LP (stakedInBucket / lpSupply — the 1e9
+  // lp-decimal scaling cancels in the ratio).
   let usd = 0;
   for (let i = 0; i < balances.length && i < tokenNames.length; i++) {
     const token = '0x' + tokenNames[i];
     const balance = num(balances[i]);
-    // Aftermath uses 1e18 normalization — undo for human-scale.
-    const tokenAmt = (balance / 10 ** 18) * (stakedInBucket / lpSupply);
+    const dec = Number(coinDecimals[i] ?? 9);
+    const humanPool = balance / 10 ** 18 / 10 ** dec;
+    const tokenAmt = humanPool * (stakedInBucket / lpSupply);
     const price = prices[token] ?? 0;
     usd += tokenAmt * price;
   }
