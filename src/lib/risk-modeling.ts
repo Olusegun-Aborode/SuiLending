@@ -258,6 +258,14 @@ export interface MonteCarloLaRResult {
   assumedAnnualVol: number;
   /** Annualized drift used (typically 0 — conservative). */
   assumedAnnualDrift: number;
+  /**
+   * Binned distribution of simulated path losses, for the on-page histogram.
+   * Each entry is [lossFractionBinLeft, count]. Range covers 0 … maxLoss
+   * with 50 bins; outliers fold into the rightmost bin.
+   */
+  lossHistogram: Array<{ x0: number; x1: number; count: number }>;
+  /** Share of paths with exactly zero liquidations (the "no-event" mode). */
+  pathsWithZeroLoss: number;
 }
 
 export interface MonteCarloLaRInputs {
@@ -328,6 +336,27 @@ export function monteCarloLaR(inputs: MonteCarloLaRInputs): MonteCarloLaRResult 
   }
 
   losses.sort((a, b) => a - b);
+
+  // Binned loss distribution for the on-page histogram. 50 bins from 0 to
+  // max observed loss (or a small floor so the chart isn't a single bar
+  // when every path has zero loss). Path frequency at each bin lets the
+  // frontend render the actual MC output rather than just summary stats.
+  const maxObserved = losses[losses.length - 1] || 0.001;
+  const nBins = 50;
+  const binW = maxObserved / nBins;
+  const lossHistogram: Array<{ x0: number; x1: number; count: number }> = [];
+  for (let i = 0; i < nBins; i++) {
+    lossHistogram.push({ x0: i * binW, x1: (i + 1) * binW, count: 0 });
+  }
+  let zeroLossPaths = 0;
+  for (const lf of losses) {
+    if (lf <= 0) { zeroLossPaths++; lossHistogram[0].count++; continue; }
+    let idx = Math.floor(lf / binW);
+    if (idx >= nBins) idx = nBins - 1;
+    if (idx < 0) idx = 0;
+    lossHistogram[idx].count++;
+  }
+
   return {
     paths,
     horizonDays,
@@ -338,6 +367,8 @@ export function monteCarloLaR(inputs: MonteCarloLaRInputs): MonteCarloLaRResult 
     expectedTimingDays: firstLiqDays.length ? mean(firstLiqDays) : null,
     assumedAnnualVol: annualVol,
     assumedAnnualDrift: annualDrift,
+    lossHistogram,
+    pathsWithZeroLoss: zeroLossPaths,
   };
 }
 

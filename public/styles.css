@@ -441,7 +441,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   white-space: normal;
   text-align: left;
   box-shadow: 0 6px 16px rgba(0,0,0,0.18);
-  z-index: 40;
+  z-index: 1000;
   pointer-events: none;
 }
 /* Caret pointing up to the icon. Built from rotated square so it inherits
@@ -627,13 +627,19 @@ body[data-theme="dark"] .time-range button.active { background: var(--surface-2)
 }
 .chain-chip.active .swatch { box-shadow: 0 0 0 2px rgba(255,107,53,0.15); }
 
-/* ─── Panel ─── */
+/* ─── Panel ───
+   .panel used to set `overflow: hidden` to clip rounded-corner backgrounds.
+   That also clipped any InfoTip popovers anchored to in-panel ⓘ icons — the
+   tip would extend past the panel boundary and disappear. Now panels run
+   with `overflow: visible` so tooltips escape cleanly; rounded-corner
+   clipping is replaced by matching border-radius on the header + an
+   inset clip on .panel-body. */
 .panel {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--panel-radius);
   position: relative;
-  overflow: hidden;
+  overflow: visible;
   display: flex; flex-direction: column;
 }
 .panel-header {
@@ -641,6 +647,10 @@ body[data-theme="dark"] .time-range button.active { background: var(--surface-2)
   padding: 12px var(--panel-pad);
   border-bottom: 1px solid var(--border);
   background: var(--surface-2);
+  border-top-left-radius: var(--panel-radius);
+  border-top-right-radius: var(--panel-radius);
+  position: relative;
+  z-index: 3;
   gap: 12px;
   min-height: 44px;
 }
@@ -657,7 +667,12 @@ body[data-aesthetic="evolved"] .panel-header { background: transparent; }
   font-family: var(--font-mono); font-size: 10px;
   color: var(--fg-muted); letter-spacing: 0.06em;
 }
-.panel-body { padding: var(--panel-pad); flex: 1; }
+.panel-body {
+  padding: var(--panel-pad);
+  flex: 1;
+  border-bottom-left-radius: var(--panel-radius);
+  border-bottom-right-radius: var(--panel-radius);
+}
 .panel-body.flush { padding: 0; }
 
 /* ─── Metric ─── */
