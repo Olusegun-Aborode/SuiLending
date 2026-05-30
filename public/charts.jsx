@@ -644,4 +644,121 @@ function Candlestick({ data, width = 400, height = 180 }) {
   );
 }
 
-Object.assign(window, { AreaChart, StackedBarChart, Treemap, Sparkline, Leaderboard, Heatmap, Candlestick });
+// ── Histogram ────────────────────────────────────────────
+//
+// Required by §6 of the DeFi Lending Analysis Standard for distribution
+// panels (HF distribution, position size, etc.). Standard explicitly says:
+//   "The SDK has no histogram primitive today; this is a required addition
+//    to charts.jsx (do not approximate a distribution by reusing a stacked
+//    bar). Until it ships, the Risk page is not standard-complete."
+//
+// Bin shape: [{ label: string, count: number, value?: number, color?: string }]
+//   label  — bin range or category, shown on x-axis
+//   count  — bar height
+//   value  — optional secondary stat shown in tooltip (e.g. $ exposure)
+//   color  — optional override (defaults to the bin's risk-colored swatch)
+// referenceX: optional bin-index for a vertical reference line (e.g. HF=1).
+// referenceLabel: optional tag rendered above the reference line.
+function Histogram({ bins, width = 800, height = 280, color = 'var(--orange)',
+                    referenceX = null, referenceLabel = null,
+                    countLabel = 'Count', valueLabel = 'Σ value', valueFormatter = fmtUSD }) {
+  const padL = 54, padR = 18, padT = 16, padB = 36;
+  const w = width, h = height;
+  const iw = w - padL - padR, ih = h - padT - padB;
+  const [hover, setHover] = useState(null);
+
+  const n = bins.length;
+  if (n === 0) return null;
+  const maxCount = Math.max(1, ...bins.map(b => b.count || 0));
+  const colW = iw / n;
+  const bw = Math.max(2, colW * 0.82);
+  const gap = colW * 0.18;
+  const x = (i) => padL + i * colW + gap / 2;
+  const y = (c) => padT + ih - (c / maxCount) * ih;
+
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map(t => Math.round(t * maxCount));
+
+  // Hit-test by column so the tooltip stays glued to the nearest bin and
+  // doesn't flicker in the gap between bars (same trick as StackedBarChart).
+  const onMove = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const sx = w / rect.width, sy = h / rect.height;
+    const mx = (e.clientX - rect.left) * sx;
+    const my = (e.clientY - rect.top) * sy;
+    if (mx < padL - 4 || mx > padL + iw + 4) { setHover(null); return; }
+    const idx = Math.max(0, Math.min(n - 1, Math.floor((mx - padL) / colW)));
+    setHover({ i: idx, x: x(idx) + bw / 2, my });
+  };
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h}
+        style={{ display: 'block', cursor: 'crosshair' }}
+        onMouseMove={onMove} onMouseLeave={() => setHover(null)}
+      >
+        {/* y-axis ticks (count) */}
+        {ticks.map((t, i) => (
+          <g key={i}>
+            <line x1={padL} x2={w - padR} y1={y(t)} y2={y(t)} stroke="var(--border)" strokeDasharray="2 3" />
+            <text x={padL - 8} y={y(t) + 4} textAnchor="end" fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-muted)">{t}</text>
+          </g>
+        ))}
+        {/* bars */}
+        {bins.map((b, i) => {
+          const c = b.count || 0;
+          if (c <= 0) return null;
+          const dim = hover && hover.i !== i;
+          return (
+            <rect key={i}
+              x={x(i)} y={y(c)} width={bw} height={Math.max(0.5, (padT + ih) - y(c))}
+              fill={b.color || color} opacity={dim ? 0.4 : 0.92} />
+          );
+        })}
+        {/* x-axis labels — show every-Nth so labels don't overlap on dense bins */}
+        {bins.map((b, i) => {
+          const stride = Math.max(1, Math.ceil(n / 8));
+          if (i % stride !== 0 && i !== n - 1) return null;
+          return (
+            <text key={i} x={x(i) + bw / 2} y={h - 18} textAnchor="middle"
+              fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-muted)">{b.label}</text>
+          );
+        })}
+        {/* reference line (e.g. HF=1) */}
+        {referenceX != null && referenceX >= 0 && referenceX < n && (
+          <g pointerEvents="none">
+            <line x1={x(referenceX) + bw / 2} x2={x(referenceX) + bw / 2}
+              y1={padT} y2={padT + ih}
+              stroke="var(--red)" strokeWidth="1" strokeDasharray="3 3" opacity="0.85" />
+            {referenceLabel && (
+              <text x={x(referenceX) + bw / 2} y={padT - 4} textAnchor="middle"
+                fontSize="10" fontFamily="var(--font-mono)" fill="var(--red)">{referenceLabel}</text>
+            )}
+          </g>
+        )}
+        <ChartWatermark x={w - 20} y={padT + 4} />
+      </svg>
+      {hover && (() => {
+        const b = bins[hover.i];
+        const cssX = Math.min((hover.x + 14) / w * 100, 100 - 24);
+        const cssY = Math.max(2, Math.min((hover.my - 12) / h * 100, 100 - 30));
+        return (
+          <div className="chart-tooltip" style={{ left: `${cssX}%`, top: `${cssY}%` }}>
+            <div className="t-date">{b.label}</div>
+            <div className="t-row">
+              <span className="t-label">{countLabel}</span>
+              <span>{b.count}</span>
+            </div>
+            {b.value != null && (
+              <div className="t-row">
+                <span className="t-label">{valueLabel}</span>
+                <span>{valueFormatter(b.value)}</span>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+Object.assign(window, { AreaChart, StackedBarChart, Treemap, Sparkline, Leaderboard, Heatmap, Candlestick, Histogram });

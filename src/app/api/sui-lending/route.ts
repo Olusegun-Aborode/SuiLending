@@ -535,6 +535,19 @@ export async function GET() {
     // dashboard renders fine without it.
     const asOf = await fetchAsOfMeta();
 
+    // ── Integrity gates per §3 ─────────────────────────────────────────────
+    // Single audit panel of green/red checks. The standard says "halts on any
+    // failure" before publication — we expose every gate result so the
+    // dashboard can render it and so an external monitor can poll the same
+    // endpoint. Gates intentionally check the SAME numbers the dashboard
+    // shows, so a red gate is a hard guarantee something is off.
+    const integrityGates = computeIntegrityGates({
+      protocolMetrics,
+      pools,
+      vaults,
+      asOf,
+    });
+
     return NextResponse.json({
       protocols,
       pools,
@@ -549,6 +562,7 @@ export async function GET() {
       ticker,
       days,
       asOf,
+      integrityGates,
       generatedAt: new Date().toISOString(),
     }, {
       headers: {
@@ -663,6 +677,159 @@ function shortenAddr(s: string): string {
   if (!s) return '';
   if (s.length <= 14) return s;
   return s.slice(0, 6) + '..' + s.slice(-4);
+}
+
+// ─── Integrity gates per §3 ────────────────────────────────────────────────
+//
+// Single audit endpoint of all hard checks the standard requires. Each gate
+// returns one of:
+//   pass  — clean
+//   warn  — non-blocking anomaly (e.g. coverage gap with documented cause)
+//   fail  — gate violation; per §3 this blocks publication
+//
+// The detail string explains WHAT failed so the integrity panel surfaces a
+// real reason, not just a red dot.
+type GateStatus = 'pass' | 'warn' | 'fail';
+interface IntegrityGate {
+  id: string;
+  label: string;
+  status: GateStatus;
+  detail: string;
+}
+
+interface IntegrityInputs {
+  protocolMetrics: Array<{ id: string; tvl: number; supply: number; borrow: number; tvlMethod?: string; tvlReference?: number | null; tvlCoverage?: number | null }>;
+  pools: Array<Record<string, unknown>>;
+  vaults: Array<Record<string, unknown>>;
+  asOf: AsOfMeta;
+}
+function computeIntegrityGates(inputs: IntegrityInputs): IntegrityGate[] {
+  const gates: IntegrityGate[] = [];
+  const allRows: Array<Record<string, unknown>> = [...inputs.pools, ...inputs.vaults];
+
+  // 1. Conservation: supply ≥ borrow, available liquidity ≥ 0 at every row.
+  {
+    const violators: string[] = [];
+    for (const r of allRows) {
+      const sup = num(r.supply ?? r.collateralUsd) ;
+      const bor = num(r.borrow ?? r.debtUsd);
+      if (bor > sup * 1.001) violators.push(`${r.protocol}/${r.sym ?? r.asset ?? '?'}`); // 0.1% tolerance for rounding
+    }
+    gates.push({
+      id: 'conservation',
+      label: 'Conservation (supply ≥ borrow per market)',
+      status: violators.length === 0 ? 'pass' : 'fail',
+      detail: violators.length === 0
+        ? `${allRows.length} markets check out`
+        : `${violators.length} market(s) report borrow > supply: ${violators.slice(0, 3).join(', ')}${violators.length > 3 ? '…' : ''}`,
+    });
+  }
+
+  // 2. Bounds: utilization ∈ [0, 100], APYs ≥ 0, HF ≥ 0.
+  {
+    const violators: string[] = [];
+    for (const r of allRows) {
+      const u = num(r.util);
+      const sa = num(r.supplyApy);
+      const ba = num(r.borrowApy);
+      if (u < -0.01 || u > 100.01) violators.push(`${r.protocol}/${r.sym ?? '?'} util=${u.toFixed(1)}%`);
+      if (sa < -0.01) violators.push(`${r.protocol}/${r.sym ?? '?'} supplyAPY=${sa.toFixed(2)}%`);
+      if (ba < -0.01) violators.push(`${r.protocol}/${r.sym ?? '?'} borrowAPY=${ba.toFixed(2)}%`);
+    }
+    gates.push({
+      id: 'bounds',
+      label: 'Bounds (util ∈ [0,100], APYs ≥ 0)',
+      status: violators.length === 0 ? 'pass' : 'fail',
+      detail: violators.length === 0
+        ? `${allRows.length} markets in bounds`
+        : `${violators.length} out-of-bounds: ${violators.slice(0, 3).join('; ')}${violators.length > 3 ? '…' : ''}`,
+    });
+  }
+
+  // 3. Aggregation: Σ(per-market supply) ≈ protocolMetrics.supply.
+  {
+    const failing: string[] = [];
+    for (const p of inputs.protocolMetrics) {
+      // Skip protocols whose live headline is fetched remotely (Scallop/Bucket)
+      // — for those, the protocol total is a different source than the
+      // per-market sum, so this gate doesn't apply.
+      if (p.tvlMethod === 'remote') continue;
+      const rows = allRows.filter(r => r.protocol === p.id);
+      const sumSupply = rows.reduce((s, r) => s + num(r.supply ?? r.collateralUsd), 0);
+      const tol = Math.max(0.5, p.supply * 0.02); // $0.5M floor or 2%
+      if (Math.abs(sumSupply - p.supply) > tol) {
+        failing.push(`${p.id}: rows=$${sumSupply.toFixed(1)}M vs metrics=$${p.supply.toFixed(1)}M`);
+      }
+    }
+    gates.push({
+      id: 'aggregation',
+      label: 'Aggregation (Σ market = protocol total within 2%)',
+      status: failing.length === 0 ? 'pass' : 'warn',
+      detail: failing.length === 0
+        ? 'All non-remote protocols reconcile'
+        : `${failing.length} mismatch: ${failing.join('; ')}`,
+    });
+  }
+
+  // 4. Reconciliation vs DefiLlama (where we have a reference).
+  {
+    const failing: string[] = [];
+    for (const p of inputs.protocolMetrics) {
+      if (p.tvlReference == null) continue;
+      const drift = Math.abs(p.tvl - p.tvlReference) / p.tvlReference;
+      // Bucket is on 'remote' (DefiLlama) so drift should be ~0. NAVI is on
+      // 'net' (supply-borrow) which CAN diverge from DefiLlama's gross figure;
+      // we accept up to 50% drift as expected methodology difference and only
+      // flag above that.
+      const tol = p.tvlMethod === 'remote' ? 0.05 : 0.5;
+      if (drift > tol) failing.push(`${p.id}: $${p.tvl.toFixed(1)}M vs DefiLlama $${p.tvlReference.toFixed(1)}M (${(drift * 100).toFixed(0)}%)`);
+    }
+    gates.push({
+      id: 'reconciliation',
+      label: 'Reconciliation vs DefiLlama (within tolerance)',
+      status: failing.length === 0 ? 'pass' : 'warn',
+      detail: failing.length === 0
+        ? 'All protocols reconcile or no reference set'
+        : failing.join('; '),
+    });
+  }
+
+  // 5. Freshness: as-of timestamp recent enough.
+  {
+    let status: GateStatus = 'pass';
+    let detail = 'Snapshot timestamp current';
+    if (!inputs.asOf.checkpointTimestamp) {
+      status = 'warn';
+      detail = 'No checkpoint timestamp from RPC';
+    } else {
+      const age = Math.round((Date.now() - new Date(inputs.asOf.checkpointTimestamp).getTime()) / 1000);
+      if (age > 3600) { status = 'fail'; detail = `Checkpoint age ${age}s (>1h)`; }
+      else if (age > 600) { status = 'warn'; detail = `Checkpoint age ${age}s (>10m)`; }
+      else detail = `Checkpoint age ${age}s`;
+    }
+    gates.push({ id: 'freshness', label: 'Freshness (as-of within tolerance)', status, detail });
+  }
+
+  // 6. Provenance: every protocol has a documented method.
+  {
+    const missing = inputs.protocolMetrics.filter(p => !p.tvlMethod).map(p => p.id);
+    gates.push({
+      id: 'provenance',
+      label: 'Provenance (tvlMethod documented per protocol)',
+      status: missing.length === 0 ? 'pass' : 'fail',
+      detail: missing.length === 0
+        ? 'All 5 protocols carry a method tag'
+        : `Missing method: ${missing.join(', ')}`,
+    });
+  }
+
+  return gates;
+}
+
+function num(v: unknown): number {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+  if (typeof v === 'string') { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+  return 0;
 }
 
 // ─── As-of helper ──────────────────────────────────────────────────────────

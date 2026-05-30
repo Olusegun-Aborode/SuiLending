@@ -412,6 +412,84 @@ function DataSourceBadge({ source, lastUpdated, cached, tone = 'green' }) {
   );
 }
 
+// ── Integrity gates panel ─────────────────────────────────
+//
+// Renders the §3 hard checks the API computes. Per the standard, "any red
+// gate blocks publication" — so we surface a single visible status pill
+// (worst-of: red > amber > green) and an expandable detail list.
+//
+// Color tokens follow §6: --red for fail, --orange for warn, --green for
+// pass. The panel collapses by default to stay out of the way; clicking
+// expands the per-gate breakdown.
+function IntegrityPanel() {
+  const D = window.SUI_LENDING_DATA;
+  const [open, setOpen] = useStateW(false);
+  const gates = D?.integrityGates || [];
+  if (gates.length === 0) return null;
+
+  // Worst status drives the overall pill.
+  const counts = gates.reduce((acc, g) => { acc[g.status] = (acc[g.status] || 0) + 1; return acc; }, {});
+  const worst = counts.fail > 0 ? 'fail' : counts.warn > 0 ? 'warn' : 'pass';
+  const pill = worst === 'fail' ? { color: 'var(--red)',    label: `${counts.fail} fail` }
+             : worst === 'warn' ? { color: 'var(--orange)', label: `${counts.warn} warn` }
+             :                    { color: 'var(--green)',  label: 'all green' };
+
+  const asOf = D?.asOf;
+  const ageSec = asOf?.checkpointTimestamp
+    ? Math.max(0, Math.round((Date.now() - new Date(asOf.checkpointTimestamp).getTime()) / 1000))
+    : null;
+  const ageStr = ageSec == null ? '—'
+    : ageSec < 60 ? `${ageSec}s ago`
+    : ageSec < 3600 ? `${Math.round(ageSec / 60)}m ago`
+    : `${Math.round(ageSec / 3600)}h ago`;
+
+  return (
+    <div className="panel" style={{ borderLeft: `3px solid ${pill.color}` }}>
+      <div className="panel-header" style={{ cursor: 'pointer' }} onClick={() => setOpen(!open)}>
+        <span className="panel-title">
+          <span className="bullet" style={{ color: pill.color }}>●</span>
+          <span style={{ marginLeft: 4 }}>Data integrity</span>
+          <span style={{ marginLeft: 12, fontSize: 10, fontFamily: 'var(--font-mono)', color: pill.color, padding: '2px 6px', border: `1px solid ${pill.color}`, borderRadius: 3, letterSpacing: '0.06em' }}>
+            {pill.label.toUpperCase()}
+          </span>
+          <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
+            as of checkpoint {asOf?.checkpoint ? `#${asOf.checkpoint.toLocaleString()}` : '—'} ({ageStr})
+          </span>
+        </span>
+        <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--fg-muted)' }}>
+          {open ? '▾ hide' : '▸ show'} ({gates.length} gates)
+        </span>
+      </div>
+      {open && (
+        <div className="panel-body" style={{ paddingTop: 0 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {gates.map(g => {
+              const c = g.status === 'fail' ? 'var(--red)'
+                      : g.status === 'warn' ? 'var(--orange)'
+                      :                       'var(--green)';
+              return (
+                <div key={g.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 0', borderBottom: '1px solid var(--border-soft)' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: c, marginTop: 6, flexShrink: 0 }} />
+                  <div style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                      <span style={{ fontWeight: 500 }}>{g.label}</span>
+                      <span style={{ color: c, fontSize: 10, letterSpacing: '0.06em' }}>{g.status.toUpperCase()}</span>
+                    </div>
+                    <div style={{ color: 'var(--fg-muted)', fontSize: 11, marginTop: 2 }}>{g.detail}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ marginTop: 8, fontSize: 10, color: 'var(--fg-dim)', fontFamily: 'var(--font-mono)', textAlign: 'right' }}>
+            DeFi Lending Analysis Standard §3 · source: {asOf?.rpcSource || '—'}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Methodology panel ─────────────────────────────────────
 function MethodologyPanel() {
   return (
@@ -623,7 +701,7 @@ function EmailGate({ dashboardName, features, onUnlock }) {
 
 Object.assign(window, {
   Dropdown, ChartToolbar, snapshotPanel, exportCSV, copyShareLink,
-  ExpandModal, MethodologyPanel, EmailGate, showNavSplash,
+  ExpandModal, MethodologyPanel, IntegrityPanel, EmailGate, showNavSplash,
   // Newer widgets backported from centrifuge dashboard
   PanelSkeleton, DataQualityBadge, DataSourceBadge,
 });

@@ -297,6 +297,9 @@ function PageOverview() {
 
   return (
     <PageShell pageId="overview" title="Lending Terminal: SUI — Overview" terminal="lending-terminal-sui-overview">
+      {/* §3 integrity gates — collapsible status row showing the worst-of:
+          green / amber / red. A red gate blocks publication per the standard. */}
+      <IntegrityPanel />
       <KpiStrip items={[
         { id: 'tvl',    label: 'Total Value Locked', value: fmtUSD(totalTvl * 1e6, 1), change: 4.82, spark: D.kpiSparks.tvl.slice(-30) },
         { id: 'supply', label: 'Total Supplied',     value: fmtUSD(totalSupply * 1e6, 1), change: 5.10, spark: D.kpiSparks.supply.slice(-30) },
