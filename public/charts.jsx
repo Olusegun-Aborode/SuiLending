@@ -38,7 +38,12 @@ function ChartWatermark({ x, y }) {
 
 // series: [{ name, color, values: number[] }, ...]
 // stacked: boolean
-function AreaChart({ series, stacked = false, width = 800, height = 280, formatter = fmtUSD, valueSuffix = '', overlayCompare = null }) {
+// markerX: optional data-index (0..len-1) at which to draw a vertical reference
+//   line — used e.g. for the current-utilization marker on the IRM curve
+//   (required by §6 of the analysis standard: every chart shows a current-state
+//   marker where one exists).
+// markerLabel: optional short label rendered above the marker line.
+function AreaChart({ series, stacked = false, width = 800, height = 280, formatter = fmtUSD, valueSuffix = '', overlayCompare = null, markerX = null, markerLabel = null }) {
   const padL = 54, padR = 18, padT = 12, padB = 28;
   const w = width, h = height;
   const iw = w - padL - padR, ih = h - padT - padB;
@@ -150,6 +155,24 @@ function AreaChart({ series, stacked = false, width = 800, height = 280, formatt
         {overlayPaths.map((p, i) => (
           <path key={i} d={p.d} fill="none" stroke={p.color} strokeWidth="2" strokeDasharray="4 3" />
         ))}
+        {/* Current-state marker (e.g. current utilization on the IRM curve).
+            Rendered as a dashed vertical line with an optional label tag at
+            the top. Sits behind the hover layer so the user can still inspect
+            values around it. */}
+        {markerX != null && markerX >= 0 && markerX < len && (
+          <g pointerEvents="none">
+            <line x1={x(markerX)} x2={x(markerX)} y1={padT} y2={padT + ih}
+              stroke="var(--fg-muted)" strokeWidth="1" strokeDasharray="3 3" opacity="0.7" />
+            {markerLabel && (
+              <g>
+                <rect x={x(markerX) - 24} y={padT - 2} width="48" height="14" rx="2"
+                  fill="var(--surface)" stroke="var(--fg-muted)" strokeWidth="0.5" />
+                <text x={x(markerX)} y={padT + 8} textAnchor="middle"
+                  fontFamily="var(--font-mono)" fontSize="9" fill="var(--fg)">{markerLabel}</text>
+              </g>
+            )}
+          </g>
+        )}
         {/* Hover */}
         {hover && (
           <g>

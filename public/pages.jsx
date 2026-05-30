@@ -1148,13 +1148,20 @@ function PageMarketDetail() {
             <div className="panel-body">
               <ParamRow k="Supply APY" v={`${market.supplyApy.toFixed(2)}%`} c="var(--green)" />
               <ParamRow k="Borrow APY" v={`${market.borrowApy.toFixed(2)}%`} c="var(--red)" />
-              <ParamRow k="Spread"     v={`${(market.borrowApy - market.supplyApy).toFixed(2)}%`} />
+              {/* Rate Spread per §4 Tier 1 — the protocol + reserve wedge. */}
+              <ParamRow k="Rate Spread" v={`${(market.borrowApy - market.supplyApy).toFixed(2)} pp`} />
+              {/* Net Interest Margin per §4 Tier 1: borrowAPY × util × (1−RF).
+                  This is what suppliers actually receive after the protocol
+                  takes its cut. Document the identity used. */}
+              <ParamRow k="Net Interest Margin"
+                v={`${(market.borrowApy * (market.util/100) * (1 - (market.reserveFactor ?? 0)/100)).toFixed(2)}%`} />
               {/* Null-guarded — old API rows may not include these fields,
                   and undefined.toFixed() throws → unmounts the page. */}
               <ParamRow k="Base Rate"     v={`${(market.irmBaseRate ?? 0).toFixed(2)}%`} />
               <ParamRow k="Multiplier"    v={`${(market.irmMultiplier ?? 0).toFixed(2)}%`} />
               <ParamRow k="Jump Mult."    v={`${(market.irmJumpMult ?? 0).toFixed(2)}%`} />
               <ParamRow k="Kink"          v={`${market.irmKink}%`} />
+              <ParamRow k="Current Util." v={`${market.util.toFixed(1)}%`} c={market.util > 80 ? 'var(--red)' : market.util > 50 ? 'var(--orange)' : 'var(--green)'} />
             </div>
           </div>
 
@@ -1262,6 +1269,11 @@ function PageMarketDetail() {
             render={({ size }) => {
               const w = size === 'expanded' ? 1200 : 1200;
               const h = size === 'expanded' ? 520 : 280;
+              // curve is sampled at u=0..100 step 2 → 51 points. The current
+              // utilization marker (per §6: "current-state marker where one
+              // exists") sits at index = util/2, rounded into bounds.
+              const currentIdx = Math.max(0, Math.min(curve.length - 1, Math.round(market.util / 2)));
+              const kinkIdx = Math.max(0, Math.min(curve.length - 1, Math.round((market.irmKink ?? 80) / 2)));
               return (
                 <AreaChart
                   series={[
@@ -1270,12 +1282,15 @@ function PageMarketDetail() {
                   ]}
                   width={w} height={h}
                   formatter={v => `${v.toFixed(2)}%`}
+                  markerX={currentIdx}
+                  markerLabel={`util ${market.util.toFixed(0)}%`}
+                  overlayCompare={null}
                 />
               );
             }}
           />
           <div style={{ marginTop: 6, fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', textAlign: 'center' }}>
-            X-axis: utilization 0% → 100%. Kink at {market.irmKink}%. Current util: {market.util.toFixed(1)}%.
+            X-axis: utilization 0% → 100%. Kink at <b>{market.irmKink}%</b>. Current util: <b>{market.util.toFixed(1)}%</b> (marker line).
           </div>
         </div>
       </PageShell>
