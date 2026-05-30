@@ -1102,8 +1102,11 @@ function PageMarketDetail() {
     const supplyTok = supplyUsd / price;
     const borrowTok = borrowUsd / price;
     const liqTok = liqUsd / price;
-    const supplyCapPct = market.supplyCap ? (supplyTok / market.supplyCap * 100) : 0;
-    const borrowCapPct = market.borrowCap ? (borrowTok / market.borrowCap * 100) : 0;
+    // Cap percentages — null means cap data isn't available for this pool (per
+    // §3 of the analysis standard, we surface "—" rather than 0% to avoid
+    // implying full headroom we haven't verified).
+    const supplyCapPct = market.supplyCap != null && market.supplyCap > 0 ? (supplyTok / market.supplyCap * 100) : null;
+    const borrowCapPct = market.borrowCap != null && market.borrowCap > 0 ? (borrowTok / market.borrowCap * 100) : null;
 
     // Interest rate curve
     const curve = (() => {
@@ -1175,10 +1178,12 @@ function PageMarketDetail() {
                     : market.healthFactor < 1.5 ? 'var(--orange)'
                     : 'var(--green)'}
               />
-              <ParamRow k="Supply Cap" v={`${fmtNum(market.supplyCap, 0)} ${marketSym}`} />
-              <ParamRow k="Borrow Cap" v={`${fmtNum(market.borrowCap, 0)} ${marketSym}`} />
-              <ParamRow k="Supply Cap Used"  v={`${supplyCapPct.toFixed(1)}%`} c={supplyCapPct > 80 ? 'var(--red)' : 'var(--fg)'} />
-              <ParamRow k="Borrow Cap Used"  v={`${borrowCapPct.toFixed(1)}%`} c={borrowCapPct > 80 ? 'var(--red)' : 'var(--fg)'} />
+              {/* Caps: render "—" when unknown rather than fake 0. Cap-used % uses
+                  semantic risk colors per §6: >80% = red. */}
+              <ParamRow k="Supply Cap" v={market.supplyCap != null && market.supplyCap > 0 ? `${fmtNum(market.supplyCap, 0)} ${marketSym}` : '—'} />
+              <ParamRow k="Borrow Cap" v={market.borrowCap != null && market.borrowCap > 0 ? `${fmtNum(market.borrowCap, 0)} ${marketSym}` : '—'} />
+              <ParamRow k="Supply Cap Used" v={supplyCapPct != null ? `${supplyCapPct.toFixed(1)}%` : '—'} c={supplyCapPct != null && supplyCapPct > 80 ? 'var(--red)' : 'var(--fg)'} />
+              <ParamRow k="Borrow Cap Used" v={borrowCapPct != null ? `${borrowCapPct.toFixed(1)}%` : '—'} c={borrowCapPct != null && borrowCapPct > 80 ? 'var(--red)' : 'var(--fg)'} />
             </div>
           </div>
 
@@ -1189,8 +1194,11 @@ function PageMarketDetail() {
               <ParamRow k="Protocol" v={proto.name} />
               <ParamRow k="Risk Tier" v={<RiskChip risk={market.risk} />} />
               <ParamRow k="Oracle" v={market.oracleSource} />
-              <ParamRow k="Suppliers" v={fmtNum(market.suppliers, 0)} />
-              <ParamRow k="Borrowers" v={fmtNum(market.borrowers, 0)} />
+              {/* Distinct-address counts — null means we don't index per-pool
+                  addresses for this protocol (currently only NAVI). Render "—"
+                  to avoid claiming 0 users. */}
+              <ParamRow k="Suppliers" v={market.suppliers != null ? fmtNum(market.suppliers, 0) : '—'} />
+              <ParamRow k="Borrowers" v={market.borrowers != null ? fmtNum(market.borrowers, 0) : '—'} />
               <ParamRow k="Spot Price" v={fmtUSD(price, price < 10 ? 4 : 2)} />
             </div>
           </div>

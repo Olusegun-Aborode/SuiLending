@@ -107,27 +107,54 @@ function Sidebar({ current }) {
 }
 
 function StatusBar() {
-  const [tick, setTick] = useStateS(0);
+  // Read real freshness data from the API's `asOf` block (per §1.3 of the
+  // analysis standard: every figure carries source + UTC + chain ref). The
+  // previous incarnation of this bar showed a fake animated checkpoint
+  // counter — looked live, was decorative.
+  const D = window.SUI_LENDING_DATA;
+  const asOf = D?.asOf;
+  // Re-render every 5s so the "x ago" age stays accurate without polling.
+  const [, setTick] = useStateS(0);
   useEffectS(() => {
-    const t = setInterval(() => setTick(x => x + 1), 4000);
+    const t = setInterval(() => setTick(x => x + 1), 5000);
     return () => clearInterval(t);
   }, []);
+
+  const checkpoint = asOf?.checkpoint;
+  const checkpointTs = asOf?.checkpointTimestamp;
+  const serverTime = asOf?.serverTime;
+  const ageSec = checkpointTs ? Math.max(0, Math.round((Date.now() - new Date(checkpointTs).getTime()) / 1000)) : null;
+  const ageStr = ageSec == null ? '—'
+    : ageSec < 60 ? `${ageSec}s ago`
+    : ageSec < 3600 ? `${Math.round(ageSec / 60)}m ago`
+    : `${Math.round(ageSec / 3600)}h ago`;
+
+  // Cache/connector signals reflect real state: we have data if D exists with
+  // at least one protocol, otherwise we're degraded.
+  const cacheOk = !!(D?.protocols?.length);
+  const protoCount = D?.protocols?.length ?? 0;
+
   return (
     <div className="statusbar">
       <div className="left">
         <span style={{ color: 'var(--orange)' }}>❯</span>
         <span>datumlabs.xyz / lending-terminal-sui</span>
         <span className="sep">│</span>
-        <span>cache: <span style={{ color: 'var(--green)' }}>healthy</span></span>
+        <span>cache: <span style={{ color: cacheOk ? 'var(--green)' : 'var(--red)' }}>{cacheOk ? 'healthy' : 'degraded'}</span></span>
         <span className="sep">│</span>
-        <span>connectors: 5/5</span>
+        <span>protocols: {protoCount}/5</span>
       </div>
       <div className="right">
-        <span>checkpoint #{(48201930 + tick).toLocaleString()}</span>
+        <span title={checkpointTs ? `checkpoint timestamp: ${checkpointTs} UTC` : 'checkpoint timestamp unavailable'}>
+          checkpoint {checkpoint ? `#${checkpoint.toLocaleString()}` : '—'}
+        </span>
         <span className="sep">│</span>
-        <span>ref gas 750 mist</span>
+        <span style={{ color: ageSec != null && ageSec > 600 ? 'var(--orange)' : 'var(--fg-muted)' }}
+              title={`server time: ${serverTime ?? '—'}`}>
+          {ageStr}
+        </span>
         <span className="sep">│</span>
-        <span>Sui mainnet</span>
+        <span title={`RPC source: ${asOf?.rpcSource ?? '—'}`}>Sui mainnet</span>
       </div>
     </div>
   );

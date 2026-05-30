@@ -528,6 +528,13 @@ export async function GET() {
       })
       .filter((t): t is NonNullable<typeof t> => !!t);
 
+    // As-of block per §1.3 and §6 of the analysis standard: every figure must
+    // carry source + UTC timestamp + chain reference. We fetch Sui's latest
+    // checkpoint via RPC so the dashboard's status bar shows a real on-chain
+    // height (not a fake animated counter). Tolerant of RPC failures —
+    // dashboard renders fine without it.
+    const asOf = await fetchAsOfMeta();
+
     return NextResponse.json({
       protocols,
       pools,
@@ -541,6 +548,7 @@ export async function GET() {
       liquidationSeries,
       ticker,
       days,
+      asOf,
       generatedAt: new Date().toISOString(),
     }, {
       headers: {
@@ -586,8 +594,13 @@ function toPoolRow(r: SnapshotRow) {
     util: r.utilization,
     risk: riskTier(r.utilization, r.borrowApy),
     spark: Array.from({ length: 30 }, () => baseValue),
-    suppliers: 0,
-    borrowers: 0,
+    // suppliers / borrowers: we don't yet index distinct on-chain addresses
+    // per pool. Per §8.C of the analysis standard ("no un-sourced figure
+    // ships"), we explicitly return null so the frontend renders "—" rather
+    // than misleading the user with a 0. Wire this up properly when wallet-
+    // position indexing covers all 5 protocols (currently NAVI-only).
+    suppliers: null,
+    borrowers: null,
     // Risk parameters now sourced from PoolSnapshot (added 2026-05-04).
     // Stored as decimal 0-1 on-chain; surfaced as whole percent here.
     ltv: ltvPct,
@@ -605,9 +618,12 @@ function toPoolRow(r: SnapshotRow) {
     irmBaseRate:      r.irmBaseRate ?? 0,
     irmMultiplier:    r.irmMultiplier ?? 0,
     irmJumpMult:      r.irmJumpMult ?? 0,
-    // Supply/borrow cap headroom — not yet persisted; placeholder 0.
-    supplyCap: 0,
-    borrowCap: 0,
+    // Supply/borrow caps — not yet persisted on PoolSnapshot. We have them
+    // on NormalizedPool from the adapters; persisting + reading them through
+    // the snapshot is a separate schema change. Return null so the dashboard
+    // renders "—" / hides cap-usage rows rather than showing fake 0%.
+    supplyCap: null,
+    borrowCap: null,
     oracleSource: r.protocol === 'navi' || r.protocol === 'suilend' || r.protocol === 'scallop' || r.protocol === 'alphalend' ? 'Pyth' : 'Pyth',
     // NOTE: `apyHistory` and `history` USED to be 90-element flat-fill arrays
     // here (every entry = today's value, since we don't have real per-day
@@ -647,4 +663,65 @@ function shortenAddr(s: string): string {
   if (!s) return '';
   if (s.length <= 14) return s;
   return s.slice(0, 6) + '..' + s.slice(-4);
+}
+
+// ─── As-of helper ──────────────────────────────────────────────────────────
+//
+// Returns the freshness/source block required by §1.3 of the analysis
+// standard. Fetches the latest Sui checkpoint sequence number and timestamp
+// from the public fullnode (Alchemy if available, else public RPC) so the
+// dashboard chrome shows a real on-chain height instead of a fake animation.
+// Falls back to a "—"-marker shape when RPC is unreachable so the page still
+// renders rather than 500ing.
+interface AsOfMeta {
+  checkpoint: number | null;
+  checkpointTimestamp: string | null;
+  network: 'sui-mainnet';
+  serverTime: string;
+  rpcSource: string;
+}
+async function fetchAsOfMeta(): Promise<AsOfMeta> {
+  const rpc = process.env.ALCHEMY_SUI_RPC ?? 'https://fullnode.mainnet.sui.io:443';
+  const rpcSource = rpc.includes('alchemy') ? 'alchemy' : rpc.includes('blockvision') ? 'blockvision' : 'fullnode.sui.io';
+  const out: AsOfMeta = {
+    checkpoint: null,
+    checkpointTimestamp: null,
+    network: 'sui-mainnet',
+    serverTime: new Date().toISOString(),
+    rpcSource,
+  };
+  try {
+    // Step 1: latest checkpoint sequence number (cheap).
+    const seqRes = await fetch(rpc, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'sui_getLatestCheckpointSequenceNumber', params: [] }),
+      next: { revalidate: 30 },
+    });
+    if (!seqRes.ok) return out;
+    const seqJson = await seqRes.json() as { result?: string };
+    const seqStr = seqJson.result;
+    if (!seqStr) return out;
+    const checkpoint = Number(seqStr);
+    out.checkpoint = checkpoint;
+
+    // Step 2: timestamp of that checkpoint. Optional — if it fails we still
+    // have the height, which is the primary signal.
+    try {
+      const tsRes = await fetch(rpc, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'sui_getCheckpoint', params: [seqStr] }),
+        next: { revalidate: 30 },
+      });
+      if (tsRes.ok) {
+        const tsJson = await tsRes.json() as { result?: { timestampMs?: string | number } };
+        const ms = Number(tsJson.result?.timestampMs);
+        if (Number.isFinite(ms) && ms > 0) out.checkpointTimestamp = new Date(ms).toISOString();
+      }
+    } catch { /* keep checkpoint, no timestamp */ }
+  } catch {
+    /* leave as nulls */
+  }
+  return out;
 }
