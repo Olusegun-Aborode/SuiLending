@@ -646,118 +646,260 @@ function Candlestick({ data, width = 400, height = 180 }) {
 
 // ── Histogram ────────────────────────────────────────────
 //
-// Required by §6 of the DeFi Lending Analysis Standard for distribution
-// panels (HF distribution, position size, etc.). Standard explicitly says:
-//   "The SDK has no histogram primitive today; this is a required addition
-//    to charts.jsx (do not approximate a distribution by reusing a stacked
-//    bar). Until it ships, the Risk page is not standard-complete."
+// Distribution primitive — ported in from the Datum Labs Dashboard SDK
+// (chart.jsx as of 2026-05). Richer than the original lending-only version
+// it replaced. Two accepted input shapes:
 //
-// Bin shape: [{ label: string, count: number, value?: number, color?: string }]
-//   label  — bin range or category, shown on x-axis
-//   count  — bar height
-//   value  — optional secondary stat shown in tooltip (e.g. $ exposure)
-//   color  — optional override (defaults to the bin's risk-colored swatch)
-// referenceX: optional bin-index for a vertical reference line (e.g. HF=1).
-// referenceLabel: optional tag rendered above the reference line.
-function Histogram({ bins, width = 800, height = 280, color = 'var(--orange)',
-                    referenceX = null, referenceLabel = null,
-                    countLabel = 'Count', valueLabel = 'Σ value', valueFormatter = fmtUSD }) {
-  const padL = 54, padR = 18, padT = 16, padB = 36;
-  const w = width, h = height;
-  const iw = w - padL - padR, ih = h - padT - padB;
+//   1. New SDK shape (preferred):
+//        values:  number[]                — raw observations, auto-binned
+//        weight:  number[]                — optional, same length as values;
+//                                            bar height becomes Σ weight
+//                                            instead of count (e.g. $ at risk)
+//        binCount / binWidth              — control binning
+//        clampRange:[lo,hi]               — fold outliers into the end bins
+//        markers: [{value,label,color}]   — vertical reference lines
+//        colorBands:[{from,to,color}]     — backdrop bands + per-bar colour
+//        xLabel / yLabel                  — axis titles inside the SVG
+//
+//   2. Legacy shape (still supported for older callers):
+//        bins: [{ label, count, value?, color? }]
+//        referenceX, referenceLabel, countLabel, valueLabel, valueFormatter
+//      Internally adapted into the new shape so the same render path runs.
+//
+// Tooltip shows the bin range, count, weight (if weighted), and share.
+const fmtEdge = (n) => {
+  if (!Number.isFinite(n)) return '∞';
+  if (Math.abs(n) >= 1000) return fmtNum(n, 1);
+  return Number.isInteger(n) ? String(n) : n.toFixed(2);
+};
+function Histogram({
+  // New SDK API
+  values, bins: preBinsRaw, weight, binCount = 20, binWidth,
+  clampRange, markers = [], colorBands = [],
+  xLabel, yLabel, valueFormat = fmtUSD,
+  // Visual
+  width = 480, height = 220, color = 'var(--chart-1)',
+  // Legacy API (older callers may still pass this shape — translated below)
+  referenceX = null, referenceLabel = null,
+  countLabel = 'Count', valueLabel,
+  valueFormatter,
+}) {
+  // Translate legacy `[{label, count, value, color}]` bins to the SDK's
+  // `[{x0, x1, count, weight}]` shape so the new render path can handle both.
+  // We assume legacy bins are sequential (one per ordinal index); x0/x1 are
+  // their indices so axis labels still line up. Legacy `referenceX` (a bin
+  // index) becomes a marker at the same index.
+  let preBins = preBinsRaw;
+  const legacyMode = !preBins && !values && Array.isArray(arguments[0]?.bins);
+  if (legacyMode) {
+    const raw = arguments[0].bins;
+    preBins = raw.map((b, i) => ({
+      x0: i, x1: i + 1, count: b.count || 0, weight: b.value ?? b.count ?? 0,
+      _label: b.label, _color: b.color,
+    }));
+    if (referenceX != null && referenceX >= 0 && referenceX < raw.length) {
+      markers = [{ value: referenceX + 0.5, label: referenceLabel ?? 'ref', color: 'var(--red)' }, ...markers];
+    }
+  }
+
+  const padL = 50, padR = 18, padT = 16, padB = xLabel ? 38 : 28;
+  const iw = width - padL - padR, ih = height - padT - padB;
   const [hover, setHover] = useState(null);
 
-  const n = bins.length;
-  if (n === 0) return null;
-  const maxCount = Math.max(1, ...bins.map(b => b.count || 0));
-  const colW = iw / n;
-  const bw = Math.max(2, colW * 0.82);
-  const gap = colW * 0.18;
-  const x = (i) => padL + i * colW + gap / 2;
-  const y = (c) => padT + ih - (c / maxCount) * ih;
+  const weighted = !!(weight && weight.length) || !!(preBins && preBins.some(b => b.weight != null && b.weight !== b.count));
 
-  const ticks = [0, 0.25, 0.5, 0.75, 1].map(t => Math.round(t * maxCount));
+  const { bins, total } = useMemo(() => {
+    let outBins;
+    if (preBins && preBins.length) {
+      outBins = preBins.map(b => ({
+        x0: b.x0, x1: b.x1,
+        count: b.count ?? 0,
+        weight: b.weight ?? b.count ?? 0,
+        _label: b._label, _color: b._color,
+      }));
+    } else {
+      const vals = values || [];
+      let lo, hi;
+      if (clampRange) { lo = clampRange[0]; hi = clampRange[1]; }
+      else { lo = vals.length ? Math.min(...vals) : 0; hi = vals.length ? Math.max(...vals) : 1; }
+      if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) { lo = lo || 0; hi = lo + 1; }
+      let nBins, bw;
+      if (binWidth) { bw = binWidth; nBins = Math.max(1, Math.ceil((hi - lo) / bw)); }
+      else { nBins = Math.max(1, Math.round(binCount)); bw = (hi - lo) / nBins; }
+      outBins = Array.from({ length: nBins }, (_, i) => ({ x0: lo + i * bw, x1: lo + (i + 1) * bw, count: 0, weight: 0 }));
+      vals.forEach((v, idx) => {
+        const w = weighted ? (weight[idx] ?? 0) : 1;
+        const cv = clampRange ? Math.max(lo, Math.min(hi - 1e-9, v)) : v;
+        let bi = Math.floor((cv - lo) / bw);
+        if (bi < 0) bi = 0;
+        if (bi >= nBins) bi = nBins - 1;
+        outBins[bi].count += 1;
+        outBins[bi].weight += w;
+      });
+    }
+    const total = outBins.reduce((a, b) => a + (weighted ? b.weight : b.count), 0) || 1;
+    return { bins: outBins, total };
+  }, [values, preBins, weight, binCount, binWidth, clampRange, weighted]);
 
-  // Hit-test by column so the tooltip stays glued to the nearest bin and
-  // doesn't flicker in the gap between bars (same trick as StackedBarChart).
-  const onMove = (e) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const sx = w / rect.width, sy = h / rect.height;
-    const mx = (e.clientX - rect.left) * sx;
-    const my = (e.clientY - rect.top) * sy;
-    if (mx < padL - 4 || mx > padL + iw + 4) { setHover(null); return; }
-    const idx = Math.max(0, Math.min(n - 1, Math.floor((mx - padL) / colW)));
-    setHover({ i: idx, x: x(idx) + bw / 2, my });
+  if (!bins.length) return null;
+
+  const metric = (b) => (weighted ? b.weight : b.count);
+  const maxY = (Math.max(...bins.map(metric)) || 1) * 1.1;
+  const x0v = bins[0].x0, x1v = bins[bins.length - 1].x1;
+  const span = (x1v - x0v) || 1;
+  const xPx = (v) => padL + ((v - x0v) / span) * iw;
+  const y = (v) => padT + ih - (v / maxY) * ih;
+
+  const bandColor = (b) => {
+    if (b._color) return b._color;
+    if (!colorBands.length) return color;
+    const c = (b.x0 + b.x1) / 2;
+    const band = colorBands.find(bd => c >= bd.from && c < bd.to);
+    return band ? band.color : color;
   };
 
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map(t => maxY * t);
+
+  // x edge ticks, thinned so labels stay legible with many bins.
+  // For legacy mode we prefer the supplied bin labels instead of edge numbers.
+  const edgeStep = Math.max(1, Math.ceil(bins.length / 8));
+  const edges = legacyMode
+    ? bins.filter((_, i) => i % edgeStep === 0 || i === bins.length - 1).map((b, idx, arr) => ({ at: (b.x0 + b.x1) / 2, label: b._label ?? fmtEdge(b.x0) }))
+    : bins.filter((_, i) => i % edgeStep === 0).map(b => b.x0).concat([x1v]).map(e => ({ at: e, label: fmtEdge(e) }));
+
   return (
-    <div style={{ position: 'relative' }}>
-      <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h}
+    <div style={{ position: 'relative', width: '100%' }}>
+      <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height}
         style={{ display: 'block', cursor: 'crosshair' }}
-        onMouseMove={onMove} onMouseLeave={() => setHover(null)}
-      >
-        {/* y-axis ticks (count) */}
+        onMouseLeave={() => setHover(null)}>
+        {/* y grid */}
         {ticks.map((t, i) => (
           <g key={i}>
-            <line x1={padL} x2={w - padR} y1={y(t)} y2={y(t)} stroke="var(--border)" strokeDasharray="2 3" />
-            <text x={padL - 8} y={y(t) + 4} textAnchor="end" fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-muted)">{t}</text>
+            <line x1={padL} x2={width - padR} y1={y(t)} y2={y(t)} stroke="var(--border)" strokeDasharray="2 3" />
+            <text x={padL - 8} y={y(t) + 4} textAnchor="end" fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-muted)">
+              {weighted ? valueFormat(t, t >= 1000 ? 1 : 0) : fmtNum(t, 0)}
+            </text>
           </g>
         ))}
+        {/* x edge ticks */}
+        {edges.map((e, i) => (
+          <text key={i} x={xPx(e.at)} y={height - (xLabel ? 16 : 8)} textAnchor="middle" fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-muted)">
+            {e.label}
+          </text>
+        ))}
+        {/* axis titles */}
+        {xLabel && (
+          <text x={padL + iw / 2} y={height - 1} textAnchor="middle" fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-dim)" style={{ letterSpacing: '0.06em' }}>{xLabel}</text>
+        )}
+        {yLabel && (
+          <text x={12} y={padT + ih / 2} textAnchor="middle" fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-dim)"
+            transform={`rotate(-90 12 ${padT + ih / 2})`} style={{ letterSpacing: '0.06em' }}>{yLabel}</text>
+        )}
+        {/* colour bands (faint backdrop) */}
+        {colorBands.map((bd, i) => {
+          const from = Math.max(x0v, bd.from);
+          const to = Math.min(x1v, Number.isFinite(bd.to) ? bd.to : x1v);
+          if (to <= from) return null;
+          return <rect key={i} x={xPx(from)} y={padT} width={Math.max(0, xPx(to) - xPx(from))} height={ih} fill={bd.color} opacity="0.05" />;
+        })}
         {/* bars */}
         {bins.map((b, i) => {
-          const c = b.count || 0;
-          if (c <= 0) return null;
-          const dim = hover && hover.i !== i;
+          const bx0 = xPx(b.x0), bx1 = xPx(b.x1);
+          const bw = Math.max(0, bx1 - bx0 - 1);
+          const top = y(metric(b));
           return (
-            <rect key={i}
-              x={x(i)} y={y(c)} width={bw} height={Math.max(0.5, (padT + ih) - y(c))}
-              fill={b.color || color} opacity={dim ? 0.4 : 0.92} />
+            <g key={i} onMouseEnter={() => setHover(i)}>
+              <rect x={bx0 + 0.5} y={top} width={bw} height={Math.max(0, padT + ih - top)}
+                fill={bandColor(b)} opacity={hover != null && hover !== i ? 0.4 : 0.85} />
+              {/* full-height hit target */}
+              <rect x={bx0} y={padT} width={Math.max(1, bx1 - bx0)} height={ih} fill="transparent" />
+            </g>
           );
         })}
-        {/* x-axis labels — show every-Nth so labels don't overlap on dense bins */}
-        {bins.map((b, i) => {
-          const stride = Math.max(1, Math.ceil(n / 8));
-          if (i % stride !== 0 && i !== n - 1) return null;
-          return (
-            <text key={i} x={x(i) + bw / 2} y={h - 18} textAnchor="middle"
-              fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-muted)">{b.label}</text>
-          );
-        })}
-        {/* reference line (e.g. HF=1) */}
-        {referenceX != null && referenceX >= 0 && referenceX < n && (
-          <g pointerEvents="none">
-            <line x1={x(referenceX) + bw / 2} x2={x(referenceX) + bw / 2}
-              y1={padT} y2={padT + ih}
-              stroke="var(--red)" strokeWidth="1" strokeDasharray="3 3" opacity="0.85" />
-            {referenceLabel && (
-              <text x={x(referenceX) + bw / 2} y={padT - 4} textAnchor="middle"
-                fontSize="10" fontFamily="var(--font-mono)" fill="var(--red)">{referenceLabel}</text>
+        {/* markers (vertical reference lines) */}
+        {markers.filter(m => m.value >= x0v && m.value <= x1v).map((m, i) => (
+          <g key={i}>
+            <line x1={xPx(m.value)} x2={xPx(m.value)} y1={padT} y2={padT + ih}
+              stroke={m.color || 'var(--fg-muted)'} strokeWidth="1.5" strokeDasharray="4 3" opacity="0.9" />
+            {m.label && (
+              <text x={xPx(m.value)} y={padT - 4} textAnchor="middle" fontSize="9" fontFamily="var(--font-mono)"
+                fill={m.color || 'var(--fg-muted)'} style={{ letterSpacing: '0.04em' }}>{m.label}</text>
             )}
           </g>
+        ))}
+        {/* hover crosshair */}
+        {hover != null && (
+          <line x1={(xPx(bins[hover].x0) + xPx(bins[hover].x1)) / 2} x2={(xPx(bins[hover].x0) + xPx(bins[hover].x1)) / 2}
+            y1={padT} y2={padT + ih} stroke="var(--orange)" strokeWidth="1" opacity="0.7" />
         )}
-        <ChartWatermark x={w - 20} y={padT + 4} />
+        <ChartWatermark x={width - 20} y={padT + 16} />
       </svg>
-      {hover && (() => {
-        const b = bins[hover.i];
-        const cssX = Math.min((hover.x + 14) / w * 100, 100 - 24);
-        const cssY = Math.max(2, Math.min((hover.my - 12) / h * 100, 100 - 30));
+      {hover != null && (() => {
+        const b = bins[hover];
+        const cx = (xPx(b.x0) + xPx(b.x1)) / 2;
+        const share = (metric(b) / total) * 100;
+        const rangeLabel = b._label ?? `${fmtEdge(b.x0)} – ${fmtEdge(b.x1)}`;
+        // Allow legacy `valueFormatter` to override the SDK's `valueFormat`.
+        const fmt = valueFormatter || valueFormat;
         return (
-          <div className="chart-tooltip" style={{ left: `${cssX}%`, top: `${cssY}%` }}>
-            <div className="t-date">{b.label}</div>
-            <div className="t-row">
-              <span className="t-label">{countLabel}</span>
-              <span>{b.count}</span>
-            </div>
-            {b.value != null && (
-              <div className="t-row">
-                <span className="t-label">{valueLabel}</span>
-                <span>{valueFormatter(b.value)}</span>
-              </div>
+          <div className="chart-tooltip" style={{ left: Math.min(cx + 12, width - 180), top: 10 }}>
+            <div className="t-date">{rangeLabel}</div>
+            <div className="t-row"><span className="t-label">{countLabel}</span><span>{b.count}</span></div>
+            {weighted && (
+              <div className="t-row"><span className="t-label">{valueLabel || yLabel || 'Value'}</span><span>{fmt(b.weight, 2)}</span></div>
             )}
+            <div className="t-row"><span className="t-label">Share</span><span>{share.toFixed(1)}%</span></div>
           </div>
         );
       })()}
     </div>
+  );
+}
+
+// ── HealthFactorHistogram ────────────────────────────────
+//
+// SDK preset wrapper over Histogram for HF distributions. Two modes:
+//   mode='usd'   bar height = Σ debtUsd in that HF bin (dollars at risk)
+//   mode='count' bar height = number of positions in that HF bin
+//
+// Baked-in markers at HF=1 ("Liquidation") and HF=1.5 ("buffer"), colour
+// bands red < 1 / yellow 1–1.5 / green ≥ 1.5, axis labels. Drops the manual
+// legend hack the Risk page used to build — those are now properties of the
+// chart itself.
+//
+// Input: `positions: [{ hf: number, debtUsd?: number }]`.
+function HealthFactorHistogram({
+  positions = [], mode = 'usd', width = 480, height = 220, binCount = 24,
+  clampRange = [0, 3], showThreshold = true, markers, colorBands,
+}) {
+  const weighted = mode === 'usd';
+  const values = positions.map(p => p.hf);
+  const weight = weighted ? positions.map(p => p.debtUsd ?? 0) : undefined;
+
+  const defaultMarkers = [{ value: 1.0, label: 'Liquidation', color: 'var(--red)' }];
+  if (showThreshold) defaultMarkers.push({ value: 1.5, label: '1.5', color: 'var(--yellow)' });
+
+  const defaultBands = [
+    { from: 0, to: 1.0, color: 'var(--red)' },
+    { from: 1.0, to: 1.5, color: 'var(--yellow)' },
+    { from: 1.5, to: Infinity, color: 'var(--green)' },
+  ];
+
+  return (
+    <Histogram
+      values={values}
+      weight={weight}
+      binCount={binCount}
+      clampRange={clampRange}
+      width={width}
+      height={height}
+      color="var(--chart-1)"
+      valueFormat={weighted ? fmtUSD : ((n) => fmtNum(n, 0))}
+      markers={markers || defaultMarkers}
+      colorBands={colorBands || defaultBands}
+      xLabel="Health Factor"
+      yLabel={weighted ? 'Debt at risk' : 'Positions'}
+    />
   );
 }
 
@@ -874,4 +1016,4 @@ function DataTable({ columns, rows, initialSort = null, emptyMessage = 'No rows.
   );
 }
 
-Object.assign(window, { AreaChart, StackedBarChart, Treemap, Sparkline, Leaderboard, Heatmap, Candlestick, Histogram, DataTable });
+Object.assign(window, { AreaChart, StackedBarChart, Treemap, Sparkline, Leaderboard, Heatmap, Candlestick, Histogram, HealthFactorHistogram, DataTable });

@@ -73,6 +73,39 @@ function PageShell({ pageId, title, terminal, headerRight, children }) {
   const protoCount  = (D.protocols || []).length;
   const marketCount = ((D.pools || []).length) + ((D.vaults || []).length);
 
+  // Derive the page-header badge state from the API payload.
+  //
+  //   • DataQualityBadge: worst-of integrity-gate status. The /api/sui-lending
+  //     response carries the 8 gates we publish (conservation, bounds,
+  //     aggregation, reconciliation, freshness, provenance, stale_collateral,
+  //     outlier_row). Any 'fail' → BROKEN; any 'warn' → DEGRADED; else
+  //     VERIFIED. Tooltip lists which gates aren't pass so a reader can drill
+  //     in without opening the integrity panel.
+  //
+  //   • DataSourceBadge: the real Sui checkpoint timestamp from asOf, surfaced
+  //     as "Sui RPC · 3m ago" with auto-refresh. Source flips to the actual
+  //     RPC provider (alchemy/blockvision/fullnode) so we don't lie about
+  //     where the data came from.
+  const gates = D.integrityGates || [];
+  const worst = gates.some(g => g.status === 'fail') ? 'fail'
+              : gates.some(g => g.status === 'warn') ? 'warn'
+              : gates.length ? 'pass' : 'unknown';
+  const qLevel = worst === 'fail' ? 'broken' : worst === 'warn' ? 'degraded' : 'ok';
+  const qLabel = worst === 'fail' ? 'BROKEN' : worst === 'warn' ? 'DEGRADED' : worst === 'pass' ? 'VERIFIED' : 'LOADING';
+  const offGates = gates.filter(g => g.status !== 'pass');
+  const qTip = offGates.length
+    ? `${offGates.length} of ${gates.length} integrity gates non-pass:\n` + offGates.map(g => `• [${g.status.toUpperCase()}] ${g.label}`).join('\n')
+    : `${gates.length} of ${gates.length} integrity gates green`;
+
+  const asOf = D.asOf || {};
+  const sourceName = asOf.rpcSource === 'alchemy' ? 'Alchemy Sui RPC'
+                   : asOf.rpcSource === 'blockvision' ? 'BlockVision Sui RPC'
+                   : asOf.rpcSource ? 'Sui RPC'
+                   : 'Sui mainnet';
+  const lastUpdatedMs = asOf.checkpointTimestamp
+    ? new Date(asOf.checkpointTimestamp).getTime()
+    : (asOf.serverTime ? new Date(asOf.serverTime).getTime() : null);
+
   return (
     <>
       <Topbar title={terminal} onOpenCmdk={() => setCmdk(true)} theme={theme} setTheme={setTheme} />
@@ -81,8 +114,10 @@ function PageShell({ pageId, title, terminal, headerRight, children }) {
         <div className="page-header">
           <div>
             <h1 className="page-title">{title}</h1>
-            <div className="page-subtitle">
-              <span className="ok">●</span> Sui mainnet · {protoCount} protocols · {marketCount} markets · updated 2s ago
+            <div className="page-subtitle" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span><span className="ok">●</span> Sui mainnet · {protoCount} protocols · {marketCount} markets</span>
+              {gates.length > 0 && <DataQualityBadge level={qLevel} label={qLabel} tooltip={qTip} />}
+              {lastUpdatedMs && <DataSourceBadge source={sourceName} lastUpdated={lastUpdatedMs} tone={qLevel === 'broken' ? 'yellow' : 'green'} />}
             </div>
           </div>
           {headerRight && <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>{headerRight}</div>}
@@ -1703,38 +1738,51 @@ function PageRisk() {
         { id: 'hhi', label: 'Asset HHI',            value: hhi.toFixed(0), change: 0, subLabel: hhiBand.label },
       ]} />
 
-      {/* HF distribution histogram (§6 mandatory panel) — with a colour
-          legend so readers know what red/orange/green mean and a plain-
-          English x-axis caption. Math moves into the InfoTip. */}
+      {/* HF distribution — uses the SDK's HealthFactorHistogram which bakes
+          in: x-axis title ("Health Factor"), markers at HF=1/1.5, colour
+          bands (red/yellow/green backdrop), and weight-by-debt vs count
+          toggling. We feed it per-market positions and let the component
+          handle the rest. The manual legend lives above as a one-line
+          explanation of the bands. */}
       <div style={{ marginTop: 16 }}>
         <ChartPanel
           title="Where do markets sit on the liquidation curve?"
-          caption="Market-level Health Factor distribution"
+          caption="Health Factor distribution, weighted by debt"
           protocolMode="none"
-          metricItems={null}
-          description={"Health Factor is how much price drop a market can absorb before liquidation: HF = (collateral × liquidation threshold) ÷ debt. HF = 1 is the trigger. Markets with no debt are shown as 'no debt' (not at risk). We use market-aggregate HF — per-wallet positions aren't indexed across all 5 protocols yet."}
-          render={({ size }) => {
+          metricItems={[
+            { id: 'usd',   label: 'Weight: Debt at risk' },
+            { id: 'count', label: 'Weight: Market count' },
+          ]}
+          defaultMetric="usd"
+          description={"Health Factor is how much price drop a market can absorb before liquidation: HF = (collateral × liquidation threshold) ÷ debt. HF = 1 is the trigger. We aggregate at the market level — per-wallet positions aren't indexed across all 5 protocols yet, so the histogram counts a market once per its aggregate HF."}
+          render={({ metric, size }) => {
             const w = size === 'expanded' ? 1200 : 1200;
             const h = size === 'expanded' ? 520 : 320;
+            // Build per-market HF positions for the SDK histogram. Skip
+            // markets without debt (HF is undefined there); they show as a
+            // separate "No debt" counter underneath.
+            const positions = allRows
+              .filter(r => r.healthFactor != null && Number.isFinite(r.healthFactor))
+              .map(r => ({
+                hf: r.healthFactor,
+                debtUsd: (r.borrow || r.debtUsd || 0) * 1e6,
+              }));
+            const noDebt = allRows.filter(r => r.healthFactor == null).length;
             return (
               <div>
-                {/* Inline legend — tells the reader exactly what the colour
-                    bands mean without making them hover individual bars. */}
                 <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginBottom: 10, fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)' }}>
                   <LegendChip color="var(--red)"    text="At risk (HF < 1)" />
-                  <LegendChip color="var(--orange)" text="Thin buffer (HF 1.0 – 1.5)" />
+                  <LegendChip color="var(--yellow)" text="Thin buffer (HF 1.0 – 1.5)" />
                   <LegendChip color="var(--green)"  text="Healthy (HF ≥ 1.5)" />
-                  <LegendChip color="var(--fg-dim)" text="No debt" />
+                  <span style={{ marginLeft: 'auto' }}>{noDebt} {noDebt === 1 ? 'market' : 'markets'} with no debt (excluded)</span>
                 </div>
-                <Histogram bins={hfBins} width={w} height={h}
-                  referenceX={hfBinAt1 >= 0 ? hfBinAt1 : null}
-                  referenceLabel="HF = 1 (liquidation)"
-                  countLabel="Markets"
-                  valueLabel="Σ debt"
-                  valueFormatter={v => fmtUSD(v * 1e6)} />
-                <div style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', marginTop: 6 }}>
-                  ← closer to liquidation &nbsp;·&nbsp; Health Factor &nbsp;·&nbsp; safer →
-                </div>
+                <HealthFactorHistogram
+                  positions={positions}
+                  mode={metric}
+                  width={w} height={h}
+                  binCount={24}
+                  clampRange={[0, 3]}
+                />
               </div>
             );
           }}
