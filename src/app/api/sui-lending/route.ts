@@ -306,15 +306,23 @@ export async function GET() {
 
     // ── Recent liquidations (last 30 days) ──────────────────
     const since30 = new Date(Date.now() - 30 * 86400 * 1000);
-    const liqRows = (await db.$queryRawUnsafe(`
+    // Filter out zero-USD events at SQL level. Many NAVI rows ingest with
+    // amount/USD = 0 because the decoder couldn't price the event (asset
+    // type not in the price registry, or zero-coin batch event). Surfacing
+    // those as "liquidations" inflated the 30D count and put hardcoded
+    // HF 0.950 / $0/$0 rows in the Recent Liquidations table. The standard
+    // says "no un-sourced figure ships" — these rows are non-events.
+    const liqRowsRaw = (await db.$queryRawUnsafe(`
       SELECT id, protocol, "txDigest", timestamp, liquidator, borrower,
         "collateralAsset", "collateralAmount"::float8, "collateralUsd"::float8,
         "debtAsset", "debtAmount"::float8, "debtUsd"::float8
       FROM "LiquidationEvent"
       WHERE timestamp >= $1
+        AND ("debtUsd" > 0 OR "collateralUsd" > 0)
       ORDER BY timestamp DESC
       LIMIT 500
     `, since30)) as LiquidationRow[];
+    const liqRows = liqRowsRaw;
 
     const liquidations = liqRows.map((l) => ({
       t: l.timestamp.toISOString(),
@@ -328,7 +336,13 @@ export async function GET() {
       liquidator: shortenAddr(l.liquidator),
       borrower: shortenAddr(l.borrower),
       txDigest: l.txDigest,
-      healthFactor: 0.95, // not stored — placeholder
+      // HF at liquidation isn't stored on LiquidationEvent (we don't read
+      // it from chain — would need a state read per event). Render as null
+      // so the frontend shows "—" instead of a constant fake 0.950 that
+      // looked like the rows were synthetic. Add a TODO to populate this
+      // by inferring HF = 1.0 (approx, since the borrower was liquidatable
+      // at event time) or by a follow-up state read.
+      healthFactor: null as number | null,
     }));
 
     // Daily liquidation aggregates
@@ -662,11 +676,16 @@ function toPoolRow(r: SnapshotRow) {
   const liqThresholdPct = (r.liquidationThreshold ?? 0) * 100;
   // Aggregate market-level Health Factor. Per-user HF needs the user's
   // collateral mix; at the market level we can compute the same quantity
-  // using totals: HF = (supplyUsd × LT) / borrowUsd. When a market has no
-  // borrows yet, HF is undefined (∞ in math, "—" in UI), so we encode it
-  // as null so the frontend can render "—".
-  const healthFactor = r.totalBorrowsUsd > 0
-    ? (r.totalSupplyUsd * (r.liquidationThreshold ?? 0)) / r.totalBorrowsUsd
+  // using totals: HF = (supplyUsd × LT) / borrowUsd.
+  // Returns null (frontend renders "—") when ANY of:
+  //   • borrows = 0 → math undefined (∞)
+  //   • liquidationThreshold missing/zero → no risk parameter → can't compute
+  //   • supply = 0 → no collateral side
+  // Previously returned 0 when LT was zero, which falsely flagged healthy
+  // markets as "at risk" on the HF distribution. Fixed 2026-05-31.
+  const lt = r.liquidationThreshold ?? 0;
+  const healthFactor = (r.totalBorrowsUsd > 0 && lt > 0 && r.totalSupplyUsd > 0)
+    ? (r.totalSupplyUsd * lt) / r.totalBorrowsUsd
     : null;
   return {
     sym: r.symbol,
@@ -696,10 +715,22 @@ function toPoolRow(r: SnapshotRow) {
     // wallets vary so this is a coarse health signal.
     healthFactor,
     // IRM parameters from the LEFT-joined RateModelParams. NULL when the
-    // adapter hasn't populated `irm` for this pool yet — coerce to 0 so
-    // the frontend can blindly call .toFixed().
-    reserveFactor:    (r.irmReserveFactor ?? 0) * 100, // decimal → percent
-    irmKink:          r.irmKink ?? 80,
+    // adapter hasn't populated `irm` for this pool yet — coerce to 0.
+    //
+    // Normalisation contract (fixed 2026-05-31):
+    //   • kink and reserveFactor are stored as 0-1 decimals in the DB;
+    //     surfaced here as whole percent so the frontend can render them
+    //     as "80%", "20%" consistently. The Rates table was displaying
+    //     irmKink as "0.8%" (the raw decimal mislabelled %). MarketDetail's
+    //     IRM curve internally divides by 100 to get a fraction, which only
+    //     works when the value is already in percent.
+    //   • Round at the route layer so Scallop's RAY-back-and-forth floats
+    //     (e.g. kink = 0.7999999998137355) don't leak unrounded into the
+    //     UI as "79.99999998137355%". Two-decimal rounding is generous —
+    //     all governance parameters are rounded to whole percent on every
+    //     protocol's own UI.
+    reserveFactor:    Math.round(((r.irmReserveFactor ?? 0) * 100) * 100) / 100,
+    irmKink:          Math.round(((r.irmKink ?? 0.8) * 100) * 100) / 100,
     irmBaseRate:      r.irmBaseRate ?? 0,
     irmMultiplier:    r.irmMultiplier ?? 0,
     irmJumpMult:      r.irmJumpMult ?? 0,
@@ -779,20 +810,33 @@ function computeIntegrityGates(inputs: IntegrityInputs): IntegrityGate[] {
   const allRows: Array<Record<string, unknown>> = [...inputs.pools, ...inputs.vaults];
 
   // 1. Conservation: supply ≥ borrow, available liquidity ≥ 0 at every row.
+  //
+  // Skip rows that aren't lending positions — Bucket PSM, V1 vault wrappers,
+  // SAVE pools, SCOIN savings, and AF/Kriya fountain stake rows are swap or
+  // staking surfaces, not borrow positions, so "borrow > supply" on those
+  // is structurally fine and shouldn't trip the publish gate. The check
+  // still runs on every true lending pool plus Bucket's main USDB-issuing
+  // vaults (SUI, WBTC, afSUI, haSUI, vSUI, etc).
+  const NON_LENDING_PREFIXES = ['PSM-', 'V1-', 'V1PSM-', 'BKT-PSM-', 'BKT-SAVE-', 'BKT-SCOIN-', 'BKT-AF-', 'BKT-KRIYA-', 'SAVING-'];
+  const isLendingRow = (sym: string): boolean => {
+    return !NON_LENDING_PREFIXES.some(pfx => sym.startsWith(pfx));
+  };
   {
     const violators: string[] = [];
     for (const r of allRows) {
-      const sup = num(r.supply ?? r.collateralUsd) ;
+      const sym = String(r.sym ?? r.asset ?? '?');
+      if (!isLendingRow(sym)) continue;
+      const sup = num(r.supply ?? r.collateralUsd);
       const bor = num(r.borrow ?? r.debtUsd);
-      if (bor > sup * 1.001) violators.push(`${r.protocol}/${r.sym ?? r.asset ?? '?'}`); // 0.1% tolerance for rounding
+      if (bor > sup * 1.001) violators.push(`${r.protocol}/${sym}`); // 0.1% tolerance for rounding
     }
     gates.push({
       id: 'conservation',
       label: 'Conservation (supply ≥ borrow per market)',
       status: violators.length === 0 ? 'pass' : 'fail',
       detail: violators.length === 0
-        ? `${allRows.length} markets check out`
-        : `${violators.length} market(s) report borrow > supply: ${violators.slice(0, 3).join(', ')}${violators.length > 3 ? '…' : ''}`,
+        ? `${allRows.length} markets check out (Bucket vault wrappers excluded)`
+        : `${violators.length} lending market(s) report borrow > supply: ${violators.slice(0, 3).join(', ')}${violators.length > 3 ? '…' : ''}`,
     });
   }
 

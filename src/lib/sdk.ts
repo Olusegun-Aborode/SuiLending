@@ -40,8 +40,18 @@ interface NaviApiPool {
   supplyCapCeiling: string;
   borrowCapCeiling: string;
   ltv: string;
+  /** Convenience decimal mirror of `ltv`, e.g. ltvValue=0.75 when ltv=7.5e26. */
+  ltvValue?: number;
   liquidationFactor: {
-    threshold: number;
+    /**
+     * NAVI API now returns `threshold` as a decimal string (e.g. "0.78").
+     * Stay defensive and accept number too; we always wrap in `num()`.
+     */
+    threshold: number | string;
+    /** Liquidation bonus, decimal (e.g. "0.08"). */
+    bonus?: number | string;
+    /** Close factor / max-repaid ratio, decimal (e.g. "0.35"). */
+    ratio?: number | string;
   };
   borrowRateFactors: {
     fields: {
@@ -49,8 +59,17 @@ interface NaviApiPool {
       base_rate?: string;
       multiplier?: string;
       jump_rate_multiplier?: string;
+      /**
+       * NAVI Open API returns reserveFactor as a RAY-scaled string in this
+       * field. Our old code hardcoded reserveFactor: 0 — fixed 2026-05-31.
+       * Field name on the API is camelCase `reserveFactor` even though the
+       * sibling rate fields are snake_case.
+       */
+      reserveFactor?: string;
     };
   };
+  /** Treasury cut RAY-scaled — used as a fallback proxy for reserveFactor. */
+  treasuryFactor?: string;
   supplyIncentiveApyInfo: {
     boostedApr: number;
   };
@@ -173,10 +192,16 @@ export async function fetchAllPools(): Promise<NaviPoolData[]> {
       const supplyApy = rateToApyPercent(pool.currentSupplyRate);
       const borrowApy = rateToApyPercent(pool.currentBorrowRate);
 
-      // Caps & risk params (scaled by 1e27)
+      // Caps & risk params (scaled by 1e27).
+      // NAVI exposes the decimal convenience `ltvValue` alongside the RAY-
+      // scaled `ltv`. Prefer the decimal when present; fall back to the
+      // RAY-scaled string. Belt and braces — if NAVI ever drops one or the
+      // other this still produces a number.
       const supplyCapCeiling = toFloat(pool.supplyCapCeiling, RAY);
       const borrowCapCeiling = toFloat(pool.borrowCapCeiling, RAY);
-      const ltv = toFloat(pool.ltv, RAY);
+      const ltv = typeof pool.ltvValue === 'number' && pool.ltvValue > 0
+        ? pool.ltvValue
+        : (pool.ltv ? toFloat(pool.ltv, RAY) : 0);
       const optimalUtilization = toFloat(
         pool.borrowRateFactors?.fields?.optimalUtilization ?? '0',
         RAY
@@ -184,14 +209,27 @@ export async function fetchAllPools(): Promise<NaviPoolData[]> {
 
       // IRM params — borrowRateFactors are RAY-scaled like rates, so divide
       // by RAY and ×100 to get percent. baseRate/multiplier/jump come from
-      // the same factor block.
+      // the same factor block. reserveFactor IS in this block (NAVI's open
+      // API returns it as a camelCase `reserveFactor` field, RAY-scaled).
+      // Our previous code hardcoded reserveFactor: 0 with a stale "not in
+      // this block" comment — the field WAS always there, we just never
+      // read it. Fixed 2026-05-31. We fall back to NAVI's `treasuryFactor`
+      // (also RAY-scaled, on the pool root) when reserveFactor is missing,
+      // since on-chain treasuryFactor is effectively the same governance
+      // parameter under a different name on legacy markets.
+      const rfField = pool.borrowRateFactors?.fields?.reserveFactor;
+      const reserveFactor = rfField
+        ? toFloat(rfField, RAY)
+        : pool.treasuryFactor
+          ? toFloat(pool.treasuryFactor, RAY)
+          : 0;
       const irm = pool.borrowRateFactors?.fields
         ? {
             baseRate:       toFloat(pool.borrowRateFactors.fields.base_rate ?? '0', RAY) * 100,
             multiplier:     toFloat(pool.borrowRateFactors.fields.multiplier ?? '0', RAY) * 100,
             jumpMultiplier: toFloat(pool.borrowRateFactors.fields.jump_rate_multiplier ?? '0', RAY) * 100,
             kink:           optimalUtilization,
-            reserveFactor:  0, // NAVI's reserve factor isn't in this block; left at 0 for now
+            reserveFactor,
           }
         : undefined;
 

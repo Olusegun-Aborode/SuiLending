@@ -462,6 +462,13 @@ function Treemap({ items, width = 400, height = 280, onSelect, selectedId, forma
               {!big && r.w > 40 && r.h > 20 && (
                 <text x={r.x + 6} y={r.y + 16} fontSize="10" fontWeight="600" fill="white" fontFamily="var(--font-mono)">{r.name}</text>
               )}
+              {/* Tiny tile escape hatch — small protocols (e.g. Scallop at
+                  ~4.5% of sector TVL) used to disappear because the rect
+                  was below the 40×20 label threshold. Now any tile ≥ 24×14
+                  gets a compact label so every protocol stays visible. */}
+              {!big && (r.w <= 40 || r.h <= 20) && r.w > 24 && r.h > 14 && (
+                <text x={r.x + 4} y={r.y + 12} fontSize="9" fontWeight="600" fill="white" fontFamily="var(--font-mono)">{r.name}</text>
+              )}
             </g>
           );
         })}

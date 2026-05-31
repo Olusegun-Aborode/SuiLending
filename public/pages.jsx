@@ -75,26 +75,34 @@ function PageShell({ pageId, title, terminal, headerRight, children }) {
 
   // Derive the page-header badge state from the API payload.
   //
-  //   • DataQualityBadge: worst-of integrity-gate status. The /api/sui-lending
-  //     response carries the 8 gates we publish (conservation, bounds,
-  //     aggregation, reconciliation, freshness, provenance, stale_collateral,
-  //     outlier_row). Any 'fail' → BROKEN; any 'warn' → DEGRADED; else
-  //     VERIFIED. Tooltip lists which gates aren't pass so a reader can drill
-  //     in without opening the integrity panel.
+  // Mapping (revised 2026-05-31 after user feedback "BROKEN over working data"):
+  //   • Anything tripping a CRITICAL gate (freshness fail, provenance fail) → BROKEN.
+  //     Those gates indicate the page is showing wrong data or no source.
+  //   • Otherwise any 'fail' AND any 'warn' → DEGRADED.
+  //     A conservation/aggregation/reconciliation fail is real but data is
+  //     still rendering; DEGRADED is the honest read.
+  //   • Otherwise any 'warn' → DEGRADED.
+  //   • Otherwise → VERIFIED.
   //
-  //   • DataSourceBadge: the real Sui checkpoint timestamp from asOf, surfaced
-  //     as "Sui RPC · 3m ago" with auto-refresh. Source flips to the actual
-  //     RPC provider (alchemy/blockvision/fullnode) so we don't lie about
-  //     where the data came from.
+  // The tooltip lists exactly which gates aren't green, with the verdict per
+  // gate ("conservation: fail · freshness: warn"), so a reader sees what
+  // BROKEN/DEGRADED actually refers to without opening the methodology page.
   const gates = D.integrityGates || [];
-  const worst = gates.some(g => g.status === 'fail') ? 'fail'
-              : gates.some(g => g.status === 'warn') ? 'warn'
-              : gates.length ? 'pass' : 'unknown';
-  const qLevel = worst === 'fail' ? 'broken' : worst === 'warn' ? 'degraded' : 'ok';
-  const qLabel = worst === 'fail' ? 'BROKEN' : worst === 'warn' ? 'DEGRADED' : worst === 'pass' ? 'VERIFIED' : 'LOADING';
+  const CRITICAL_GATES = new Set(['freshness', 'provenance']);
+  const hasCriticalFail = gates.some(g => g.status === 'fail' && CRITICAL_GATES.has(g.id));
+  const hasFail = gates.some(g => g.status === 'fail');
+  const hasWarn = gates.some(g => g.status === 'warn');
+  const qLevel = hasCriticalFail   ? 'broken'
+              : (hasFail || hasWarn) ? 'degraded'
+              : gates.length         ? 'ok'
+              :                        'unknown';
+  const qLabel = qLevel === 'broken' ? 'BROKEN'
+               : qLevel === 'degraded' ? 'DEGRADED'
+               : qLevel === 'ok' ? 'VERIFIED'
+               : 'LOADING';
   const offGates = gates.filter(g => g.status !== 'pass');
   const qTip = offGates.length
-    ? `${offGates.length} of ${gates.length} integrity gates non-pass:\n` + offGates.map(g => `• [${g.status.toUpperCase()}] ${g.label}`).join('\n')
+    ? `${offGates.length} of ${gates.length} gates non-pass:\n` + offGates.map(g => `• [${g.status.toUpperCase()}] ${g.label}`).join('\n')
     : `${gates.length} of ${gates.length} integrity gates green`;
 
   const asOf = D.asOf || {};
@@ -822,6 +830,18 @@ function PageOverview() {
   const totalBorrow = D.protocolMetrics.reduce((s, p) => s + p.borrow, 0);
   const liq30d = D.liquidations.length;
 
+  // Per-protocol TVL method (net / gross / remote) for the disclosure
+  // tooltip on the headline TVL KPI. Sector TVL is a SUM of per-protocol
+  // methods — it does NOT equal Supplied − Borrowed because some protocols
+  // report gross supply, some net liquidity, and Scallop / Bucket use
+  // their own canonical fetch. Disclosed inline so the arithmetic mismatch
+  // the user spotted (586.8 − 211.7 = 375.1 ≠ 426.5) is documented at
+  // the source.
+  const tvlBreakdownNote = (D.protocolMetrics || [])
+    .map(p => `• ${p.id} — ${(p.tvlMethod || 'gross').toUpperCase()}: $${(p.tvl).toFixed(1)}M`)
+    .join('\n');
+  const tvlNote = `TVL sums per-protocol methods (mixed basis):\n${tvlBreakdownNote}\n\nThis sum does NOT equal Supplied − Borrowed because each protocol's UI reports a different TVL definition (some net, some gross, some via remote canonical fetch). We match each protocol's own headline number, then sum. See Methodology page for the per-protocol calibration.`;
+
   return (
     <PageShell pageId="overview" title="Lending Terminal: SUI — Overview" terminal="lending-terminal-sui-overview">
       {/* Data Integrity + Methodology moved to their own page (sidebar
@@ -831,10 +851,13 @@ function PageOverview() {
           status as a DataQualityBadge so degraded data is impossible to
           miss without opening the methodology page. */}
       <KpiStrip items={[
-        { id: 'tvl',    label: 'Total Value Locked', value: fmtUSD(totalTvl * 1e6, 1), change: 4.82, spark: D.kpiSparks.tvl.slice(-30) },
-        { id: 'supply', label: 'Total Supplied',     value: fmtUSD(totalSupply * 1e6, 1), change: 5.10, spark: D.kpiSparks.supply.slice(-30) },
-        { id: 'borrow', label: 'Total Borrowed',     value: fmtUSD(totalBorrow * 1e6, 1), change: 3.42, spark: D.kpiSparks.borrow.slice(-30) },
-        { id: 'liq',    label: 'Liquidations (30D)', value: fmtNum(liq30d, 0), change: -2.1, subLabel: 'count', spark: D.kpiSparks.liq.slice(-30) },
+        { id: 'tvl',    label: 'Total Value Locked', value: fmtUSD(totalTvl * 1e6, 1), change: 4.82, spark: D.kpiSparks.tvl.slice(-30),
+          subLabel: 'mixed-method sum · see ⓘ', note: tvlNote },
+        { id: 'supply', label: 'Total Supplied',     value: fmtUSD(totalSupply * 1e6, 1), change: 5.10, spark: D.kpiSparks.supply.slice(-30),
+          subLabel: 'gross deposits, all protocols' },
+        { id: 'borrow', label: 'Total Borrowed',     value: fmtUSD(totalBorrow * 1e6, 1), change: 3.42, spark: D.kpiSparks.borrow.slice(-30),
+          subLabel: `${(totalBorrow / totalSupply * 100).toFixed(0)}% utilization` },
+        { id: 'liq',    label: 'Liquidations (30D)', value: fmtNum(liq30d, 0), change: -2.1, subLabel: 'count · zero-USD events filtered', spark: D.kpiSparks.liq.slice(-30) },
       ]} />
 
       <div className="grid grid-12" style={{ marginTop: 16 }}>
@@ -1261,7 +1284,16 @@ function PageProtocol() {
         { id: 'tvl',     label: 'Protocol TVL',      value: fmtUSD(metrics.tvl * 1e6, 1), change: 4.2, note: metrics.tvlNote },
         { id: 'supply',  label: isPool ? 'Total Supplied' : 'Collateral Locked', value: fmtUSD((isPool ? metrics.supply : protoMarkets.reduce((s,v)=>s+v.collateralUsd,0)) * 1e6, 1), change: 5.0 },
         { id: 'borrow',  label: isPool ? 'Total Borrowed' : 'USDB Outstanding',  value: fmtUSD((isPool ? metrics.borrow : protoMarkets.reduce((s,v)=>s+v.debtUsd,0)) * 1e6, 1), change: 3.5 },
-        { id: 'users',   label: 'Active Users',      value: fmtNum(metrics.users, 0), change: 2.8 },
+        // Relabelled 2026-05-31: "Active Users" was actually a max of
+        // (distinct liquidated borrowers in 30D) and (WalletPosition rows
+        // for this protocol). The standard says label honestly — so we
+        // surface the more specific name. WalletPosition is currently NAVI-
+        // only, which is why other protocols read low; Bucket reads 0
+        // because no liquidation events have been ingested for Bucket
+        // (Bucket doesn't liquidate, it redeems).
+        { id: 'users',   label: 'Distinct addresses (30D)', value: fmtNum(metrics.users, 0), change: 2.8,
+          subLabel: 'liq. borrowers + wallet positions',
+          note: 'Distinct addresses we observed acting on this protocol in the last 30 days. Two sources merged: distinct borrowers in liquidation events + WalletPosition rows. WalletPosition is currently only indexed for NAVI; other protocols only count from liquidations. This proxies "active users" but is not a true active-user count.' },
       ]} />
 
       <div className="grid grid-12" style={{ marginTop: 16 }}>
@@ -1627,7 +1659,13 @@ function PageRevenue() {
             const w = size === 'expanded' ? 1200 : 360;
             const h = size === 'expanded' ? 560 : 300;
             const items = rows.map(r => ({ id: r.id, name: r.name, value: r[metric], color: r.color }));
-            return <Treemap items={items} width={w} height={h} />;
+            // Treemap's default formatter multiplies the input by 1e6 (it
+            // assumes values are in $M, matching the Protocol Mix treemap
+            // up above). Fee values here are already in dollars — pass an
+            // explicit formatter so the labels don't blow up by 10⁶ and
+            // claim "$46.78B" when the KPI strip says "$128.29K". Fixed
+            // 2026-05-31.
+            return <Treemap items={items} width={w} height={h} formatter={(v) => fmtUSD(v, 1)} />;
           }}
         />
       </div>
@@ -2743,7 +2781,7 @@ function PageLiquidation() {
             let events = allEvents.filter(l => matchProto(l, proto));
             if (metric === 'repaid') events = [...events].sort((a,b) => b.debtRepaidUsd - a.debtRepaidUsd);
             else if (metric === 'bonus') events = [...events].sort((a,b) => b.bonusUsd - a.bonusUsd);
-            else if (metric === 'hf') events = [...events].sort((a,b) => a.healthFactor - b.healthFactor);
+            else if (metric === 'hf') events = [...events].sort((a,b) => (a.healthFactor ?? Infinity) - (b.healthFactor ?? Infinity));
             const limit = size === 'expanded' ? events.length : 60;
             return (
               <div style={{ overflowX: 'auto', maxHeight: size === 'expanded' ? '70vh' : 480, overflowY: 'auto' }}>
@@ -2757,7 +2795,7 @@ function PageLiquidation() {
                       <th style={{ padding: 8 }}>Repaid</th>
                       <th style={{ padding: 8 }}>Seized</th>
                       <th style={{ padding: 8 }}>Bonus</th>
-                      <th style={{ padding: 8 }}>HF</th>
+                      <th style={{ padding: 8 }} title="HF at liquidation — not yet indexed for these events; rendered as '—' rather than a hardcoded 0.950 placeholder.">HF</th>
                       <th style={{ padding: 8 }}>Borrower</th>
                     </tr>
                   </thead>
@@ -2771,7 +2809,9 @@ function PageLiquidation() {
                         <td style={{ padding: 6, color: 'var(--red)' }}>{fmtUSD(l.debtRepaidUsd, 0)}</td>
                         <td style={{ padding: 6 }}>{fmtUSD(l.collateralSeizedUsd, 0)}</td>
                         <td style={{ padding: 6, color: 'var(--green)' }}>+{fmtUSD(l.bonusUsd, 0)}</td>
-                        <td style={{ padding: 6, color: l.healthFactor < 0.9 ? 'var(--red)' : 'var(--fg)' }}>{l.healthFactor.toFixed(3)}</td>
+                        <td style={{ padding: 6, color: l.healthFactor != null && l.healthFactor < 0.9 ? 'var(--red)' : 'var(--fg-muted)' }}>
+                          {l.healthFactor != null ? l.healthFactor.toFixed(3) : '—'}
+                        </td>
                         <td style={{ padding: 6, color: 'var(--fg-muted)' }}>{l.borrower}</td>
                       </tr>
                     ))}
@@ -3036,7 +3076,16 @@ function PageMarketDetail() {
       <KpiStrip items={[
         { id: 'col', label: 'Collateral Locked', value: fmtUSD(market.collateralUsd * 1e6, 2), change: 4.0, subLabel: `${fmtNum(market.collateralUsd * 1e6 / price, 1)} ${marketSym}` },
         { id: 'dbt', label: 'USDB Outstanding',  value: fmtUSD(market.debtUsd * 1e6, 2), change: 3.4 },
-        { id: 'cr',  label: 'Aggregate CR',      value: `${(market.collateralUsd / market.debtUsd * 100).toFixed(0)}%`, change: 0, subLabel: `min ${market.minCR}%` },
+        // CR is undefined when debt = 0 — used to render as Infinity%. Guard
+        // the divide-by-zero and render "—" (consistent with HF for null-
+        // debt markets). minCR sub-label still displays so the parameter is
+        // visible even when no positions are open.
+        { id: 'cr',  label: 'Aggregate CR',
+          value: market.debtUsd > 0
+            ? `${(market.collateralUsd / market.debtUsd * 100).toFixed(0)}%`
+            : '—',
+          change: 0,
+          subLabel: market.debtUsd > 0 ? `min ${market.minCR}%` : 'no debt outstanding' },
         { id: 'rate',label: 'Interest Rate',     value: `${market.interestRate.toFixed(2)}%`, change: 0 },
       ]} />
 
