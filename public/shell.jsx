@@ -14,8 +14,8 @@ const PAGES = [
   // leaderboard, HHI, days-since-bad-debt.
   { id: 'risk',        label: 'Risk',        href: 'Risk.html',        icon: '!' },
   { id: 'liquidation', label: 'Liquidation', href: 'Liquidation.html', icon: '✖' },
-  // Compare page per §6: side-by-side protocol metrics on every headline figure.
-  { id: 'compare',     label: 'Compare',     href: 'Compare.html',     icon: '⇄' },
+  // Compare page was removed 2026-05-30 — the cross-protocol comparison
+  // table is now part of Overview (search ProtocolComparisonTable).
   // Methodology page hosts the data-integrity gates panel (§3) and the
   // data-source / metric-definition methodology. Lives in the Workspace
   // sidebar section, not the main grid.
@@ -79,7 +79,8 @@ function Sidebar({ current }) {
         { ...PAGES[4], count: null },                            // Collateral
         { ...PAGES[5], count: null },                            // Risk
         { ...PAGES[6], count: null },                            // Liquidation
-        { ...PAGES[7], count: null },                            // Compare
+        // Compare nav item was dropped 2026-05-30 — the cross-protocol
+        // comparison table now lives at the bottom of the Overview page.
       ],
     },
     {
