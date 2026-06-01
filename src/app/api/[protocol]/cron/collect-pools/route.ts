@@ -53,50 +53,69 @@ export async function GET(
       borrowApy: num(pool.borrowApy),
       utilization: num(pool.utilization),
       price: num(pool.price),
-      // Risk parameters. Adapters fetch these (NormalizedPool has them) but
-      // we used to drop them on the floor — Prisma columns added 2026-05-04.
-      // Bucket vaults set ltv = 1 / minCollateralRatio so this still works
-      // for the CDP archetype.
+      // ltv / liquidationThreshold moved to RateModelParams (governance
+      // state, not transient pool state). See history note on
+      // RateModelParams in schema.prisma. We still write to the legacy
+      // PoolSnapshot columns so older builds reading from there keep
+      // showing real values — but the route handler now prefers
+      // RateModelParams as the source of truth.
       ltv: num(pool.ltv),
       liquidationThreshold: num(pool.liquidationThreshold),
     }));
 
     await db.poolSnapshot.createMany({ data: snapshots });
 
-    // Upsert RateModelParams for any pool the adapter populated `irm` for.
-    // IRM params change rarely (governance updates only), so per-pool unique
-    // keyed by (protocol, symbol) is the right granularity — not snapshot-style.
-    let irmWritten = 0;
+    // Upsert RateModelParams for EVERY pool (not just ones with `irm`) so
+    // the table reliably carries ltv/lt for every market the adapter sees.
+    // IRM bundle is optional; if missing we still upsert ltv/lt and zero
+    // the IRM fields (preserving existing IRM via the update path so we
+    // don't accidentally overwrite a good value with zero).
+    let rmpWritten = 0;
     for (const pool of pools) {
-      if (!pool.irm) continue;
+      const ltv = num(pool.ltv);
+      const liquidationThreshold = num(pool.liquidationThreshold);
+      const irm = pool.irm;
       try {
         await db.rateModelParams.upsert({
           where: { protocol_symbol: { protocol: slug, symbol: pool.symbol } },
           update: {
-            baseRate:       num(pool.irm.baseRate),
-            multiplier:     num(pool.irm.multiplier),
-            jumpMultiplier: num(pool.irm.jumpMultiplier),
-            kink:           num(pool.irm.kink),
-            reserveFactor:  num(pool.irm.reserveFactor),
-            updatedAt:      new Date(),
+            // IRM fields only update when the adapter provided a fresh value;
+            // we DON'T want a momentary fetch failure to clear the kink to 0.
+            ...(irm
+              ? {
+                  baseRate:       num(irm.baseRate),
+                  multiplier:     num(irm.multiplier),
+                  jumpMultiplier: num(irm.jumpMultiplier),
+                  kink:           num(irm.kink),
+                  reserveFactor:  num(irm.reserveFactor),
+                }
+              : {}),
+            // Same protection on ltv/lt — only overwrite when the new value
+            // is greater than zero. Stale governance state beats clearing
+            // to zero on a transient adapter hiccup.
+            ...(ltv > 0 ? { ltv } : {}),
+            ...(liquidationThreshold > 0 ? { liquidationThreshold } : {}),
+            updatedAt: new Date(),
           },
           create: {
             protocol: slug,
             symbol: pool.symbol,
-            baseRate:       num(pool.irm.baseRate),
-            multiplier:     num(pool.irm.multiplier),
-            jumpMultiplier: num(pool.irm.jumpMultiplier),
-            kink:           num(pool.irm.kink),
-            reserveFactor:  num(pool.irm.reserveFactor),
+            baseRate:       num(irm?.baseRate),
+            multiplier:     num(irm?.multiplier),
+            jumpMultiplier: num(irm?.jumpMultiplier),
+            kink:           num(irm?.kink),
+            reserveFactor:  num(irm?.reserveFactor),
+            ltv,
+            liquidationThreshold,
           },
         });
-        irmWritten += 1;
+        rmpWritten += 1;
       } catch (e) {
-        // One pool's IRM upsert failing shouldn't break the whole snapshot;
-        // log and continue.
-        console.warn(`[collect-pools/${slug}] irm upsert ${pool.symbol}:`, e instanceof Error ? e.message : e);
+        // One pool's upsert failing shouldn't break the whole batch.
+        console.warn(`[collect-pools/${slug}] rmp upsert ${pool.symbol}:`, e instanceof Error ? e.message : e);
       }
     }
+    const irmWritten = rmpWritten;
 
     return NextResponse.json({
       success: true,

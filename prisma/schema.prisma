@@ -117,17 +117,26 @@ model CollateralBorrowPair {
   @@unique([protocol, collateralAsset, borrowAsset])
 }
 
-/// Interest rate model parameters per asset (from on-chain config).
+/// Interest rate model + risk parameters per asset (from on-chain config).
+/// These are governance state (slow-moving), upserted by collect-pools.
+///
+/// HISTORY: ltv / liquidationThreshold previously lived on PoolSnapshot
+/// (transient, per-cron-tick) but the deployed cron was repeatedly clearing
+/// them to 0 on NAVI. Moved here 2026-06-01 so they're upserted alongside
+/// IRM params — even when the snapshot writer drops them, the latest known
+/// good values persist.
 model RateModelParams {
-  id                Int      @id @default(autoincrement())
-  protocol          String   @default("navi") @db.VarChar(20)
-  symbol            String   @db.VarChar(64)
-  baseRate          Float
-  multiplier        Float
-  jumpMultiplier    Float
-  kink              Float
-  reserveFactor     Float
-  updatedAt         DateTime @default(now())
+  id                   Int      @id @default(autoincrement())
+  protocol             String   @default("navi") @db.VarChar(20)
+  symbol               String   @db.VarChar(64)
+  baseRate             Float
+  multiplier           Float
+  jumpMultiplier       Float
+  kink                 Float
+  reserveFactor        Float
+  ltv                  Float    @default(0)
+  liquidationThreshold Float    @default(0)
+  updatedAt            DateTime @default(now())
 
   @@unique([protocol, symbol])
 }

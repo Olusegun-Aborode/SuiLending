@@ -160,6 +160,16 @@ export async function GET() {
     // cron — so the IRM here matches the pool's current state. Pools without
     // an IRM entry (e.g. adapters that haven't populated `irm` yet) get NULL,
     // which the toPoolRow helper coerces to 0.
+    // Source of truth for ltv / liquidationThreshold:
+    //   COALESCE(RateModelParams.value, PoolSnapshot.value)
+    //
+    // Why: PoolSnapshot is per-cron-tick. NAVI's deployed cron was zeroing
+    // those columns repeatedly even though the adapter returned correct
+    // values (root cause never fully identified — likely stale Prisma client
+    // on Vercel). RateModelParams is governance state we upsert with WHERE
+    // value > 0 guards, so it's the cron-proof source. We still read the
+    // snapshot column as a fallback so older snapshots that pre-date the
+    // RateModelParams.ltv migration aren't blanked.
     const latestRows = (await db.$queryRawUnsafe(`
       SELECT DISTINCT ON (ps.protocol, ps.symbol)
         ps.protocol, ps.symbol, ps.timestamp,
@@ -168,7 +178,8 @@ export async function GET() {
         ps."availableLiquidityUsd"::float8,
         ps."supplyApy"::float8, ps."borrowApy"::float8,
         ps.utilization::float8, ps.price::float8,
-        ps.ltv::float8, ps."liquidationThreshold"::float8,
+        COALESCE(NULLIF(rmp.ltv::float8, 0), ps.ltv::float8) AS ltv,
+        COALESCE(NULLIF(rmp."liquidationThreshold"::float8, 0), ps."liquidationThreshold"::float8) AS "liquidationThreshold",
         rmp."baseRate"::float8       AS "irmBaseRate",
         rmp.multiplier::float8       AS "irmMultiplier",
         rmp."jumpMultiplier"::float8 AS "irmJumpMult",
