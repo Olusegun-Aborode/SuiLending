@@ -43,7 +43,7 @@ function ChartWatermark({ x, y }) {
 //   (required by §6 of the analysis standard: every chart shows a current-state
 //   marker where one exists).
 // markerLabel: optional short label rendered above the marker line.
-function AreaChart({ series, stacked = false, width = 800, height = 280, formatter = fmtUSD, valueSuffix = '', overlayCompare = null, markerX = null, markerLabel = null }) {
+function AreaChart({ series, stacked = false, width = 800, height = 280, formatter = fmtUSD, valueSuffix = '', overlayCompare = null, markerX = null, markerLabel = null, xTickFormatter = null }) {
   const padL = 54, padR = 18, padT = 12, padB = 28;
   const w = width, h = height;
   const iw = w - padL - padR, ih = h - padT - padB;
@@ -138,10 +138,12 @@ function AreaChart({ series, stacked = false, width = 800, height = 280, formatt
             </text>
           </g>
         ))}
-        {/* x labels */}
+        {/* x labels — default formatter is "Today / Xd ago" (time-series).
+            Override with xTickFormatter when the axis is something else
+            (e.g. the IRM curve plots utilization 0%→100%, not time). */}
         {[0, Math.floor(len/4), Math.floor(len/2), Math.floor(3*len/4), len-1].map(i => (
           <text key={i} x={x(i)} y={h - 8} textAnchor="middle" fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-muted)">
-            {daysAgoLabel(i, len)}
+            {xTickFormatter ? xTickFormatter(i, len) : daysAgoLabel(i, len)}
           </text>
         ))}
         {/* areas and lines */}

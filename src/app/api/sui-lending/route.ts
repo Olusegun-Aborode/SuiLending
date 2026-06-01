@@ -317,19 +317,31 @@ export async function GET() {
 
     // ── Recent liquidations (last 30 days) ──────────────────
     const since30 = new Date(Date.now() - 30 * 86400 * 1000);
-    // Filter out zero-USD events at SQL level. Many NAVI rows ingest with
-    // amount/USD = 0 because the decoder couldn't price the event (asset
-    // type not in the price registry, or zero-coin batch event). Surfacing
-    // those as "liquidations" inflated the 30D count and put hardcoded
-    // HF 0.950 / $0/$0 rows in the Recent Liquidations table. The standard
-    // says "no un-sourced figure ships" — these rows are non-events.
+    // Filter out sub-$1 events at SQL level. 35% of all NAVI/Suilend rows
+    // were ingesting with debt+coll both under $1 — the decoder ran fine
+    // but the actual values were sub-dollar micro-events that round to "$0"
+    // in the display layer. Threshold raised from > 0 to >= 1 USD so non-
+    // events stop rendering as liquidations. Also still excludes the
+    // decoder-failure cases (both fields = 0).
+    //
+    // Real 30D count separately: keep an unfiltered COUNT for the KPI so
+    // we don't claim "30D = 500" (the LIMIT cap on the row fetch). The
+    // KPI now reports the true count; the table shows the top-500 rows.
+    const liq30dCountRow = (await db.$queryRawUnsafe(`
+      SELECT COUNT(*)::int AS count
+      FROM "LiquidationEvent"
+      WHERE timestamp >= $1
+        AND ("debtUsd" >= 1 OR "collateralUsd" >= 1)
+    `, since30)) as Array<{ count: number }>;
+    const liq30dCount = liq30dCountRow[0]?.count ?? 0;
+
     const liqRowsRaw = (await db.$queryRawUnsafe(`
       SELECT id, protocol, "txDigest", timestamp, liquidator, borrower,
         "collateralAsset", "collateralAmount"::float8, "collateralUsd"::float8,
         "debtAsset", "debtAmount"::float8, "debtUsd"::float8
       FROM "LiquidationEvent"
       WHERE timestamp >= $1
-        AND ("debtUsd" > 0 OR "collateralUsd" > 0)
+        AND ("debtUsd" >= 1 OR "collateralUsd" >= 1)
       ORDER BY timestamp DESC
       LIMIT 500
     `, since30)) as LiquidationRow[];
@@ -653,6 +665,7 @@ export async function GET() {
       protocolMetrics,
       kpiSparks,
       liquidations,
+      liq30dCount,  // true 30D count (independent of the LIMIT 500 row cap)
       liquidationSeries,
       ticker,
       days,
