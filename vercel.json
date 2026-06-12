@@ -20,6 +20,9 @@
 
     { "path": "/api/bucket/cron/collect-pools",         "schedule": "40 0 * * *" },
     { "path": "/api/bucket/cron/index-liquidations",    "schedule": "55 0 * * *" },
-    { "path": "/api/bucket/cron/aggregate-daily",       "schedule": "45 1 * * *" }
+    { "path": "/api/bucket/cron/aggregate-daily",       "schedule": "45 1 * * *" },
+
+    { "path": "/api/cron/backfill-defillama",           "schedule": "0 2 * * *" },
+    { "path": "/api/cron/catch-up",                     "schedule": "0 3 * * *" }
   ]
 }
