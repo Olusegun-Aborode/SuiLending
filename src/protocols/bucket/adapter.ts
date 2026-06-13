@@ -399,6 +399,21 @@ function toPsmNormalized(p: PsmInfo, prices: Record<string, number>): Normalized
   const balance     = bigToHuman(p.balance, decimals);
   const usdbIssued  = bigToHuman(p.usdbSupply, USDB_DECIMALS);
 
+  // Real PSM swap fee. The SDK exposes feeRate.{swapIn,swapOut} as decimals
+  // (e.g. 0.005 = 0.5%). swapIn = fee to deposit the asset and mint USDB,
+  // swapOut = fee to redeem USDB back to the asset. We surface the larger of
+  // the two as the headline "PSM fee" (the worst-case a user pays) in whole
+  // percent. This replaces the old hardcoded 0.1% placeholder.
+  //
+  // Sentinel guard: a DISABLED PSM carries an absurd fee (observed PSM-USDT
+  // at raw 300 → 30000%) to effectively turn the pool off. Any raw fee above
+  // 1.0 (100%) is not a real fee — treat it as disabled and surface null so
+  // the UI renders "—" rather than "30000%".
+  const swapIn  = p.feeRate?.swapIn  ?? 0;
+  const swapOut = p.feeRate?.swapOut ?? 0;
+  const rawFee  = Math.max(swapIn, swapOut);
+  const psmFee  = rawFee > 1 ? null : rawFee * 100;
+
   return {
     symbol,
     coinType,
@@ -418,6 +433,7 @@ function toPsmNormalized(p: PsmInfo, prices: Record<string, number>): Normalized
     supplyCapCeiling: 0,
     borrowCapCeiling: 0,
     optimalUtilization: 0,
+    psmFee,                        // real swap fee, whole percent
     price,
   };
 }

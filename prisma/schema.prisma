@@ -136,6 +136,11 @@ model RateModelParams {
   reserveFactor        Float
   ltv                  Float    @default(0)
   liquidationThreshold Float    @default(0)
+  // Bucket-only CDP/PSM fee params (whole percent). Nullable because only
+  // Bucket PSM rows carry psmFee; CDP vaults and other protocols leave them
+  // null. Added 2026-06.
+  psmFee               Float?
+  redemptionFee        Float?
   updatedAt            DateTime @default(now())
 
   @@unique([protocol, symbol])

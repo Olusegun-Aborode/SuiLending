@@ -109,6 +109,10 @@ interface SnapshotRow {
   irmJumpMult: number | null;
   irmKink: number | null;
   irmReserveFactor: number | null;
+  // Bucket-only fee params from RateModelParams. null for non-Bucket rows
+  // and for CDP vaults (psmFee is PSM-only; redemptionFee is reserved).
+  psmFee: number | null;
+  redemptionFee: number | null;
   supplyApy: number;
   borrowApy: number;
   utilization: number;
@@ -216,7 +220,9 @@ export async function GET() {
         rmp.multiplier::float8       AS "irmMultiplier",
         rmp."jumpMultiplier"::float8 AS "irmJumpMult",
         rmp.kink::float8             AS "irmKink",
-        rmp."reserveFactor"::float8  AS "irmReserveFactor"
+        rmp."reserveFactor"::float8  AS "irmReserveFactor",
+        rmp."psmFee"::float8         AS "psmFee",
+        rmp."redemptionFee"::float8  AS "redemptionFee"
       FROM "PoolSnapshot" ps
       LEFT JOIN "RateModelParams" rmp
         ON rmp.protocol = ps.protocol AND rmp.symbol = ps.symbol
@@ -800,13 +806,13 @@ function toVaultRow(r: SnapshotRow) {
     collateralUsd: r.totalSupplyUsd / 1e6,
     debtUsd: r.totalBorrowsUsd / 1e6,
     interestRate: r.borrowApy,
-    // redemptionFee / psmFee are NOT indexed — the adapter doesn't read them
-    // and they aren't on PoolSnapshot. Return null so the frontend renders
-    // "—" rather than the fake 0.5% / 0.1% placeholders that used to ship.
-    // Wire these up properly when the Bucket adapter persists per-vault fee
-    // params (needs a schema column).
-    redemptionFee: null as number | null,
-    psmFee: null as number | null,
+    // Real Bucket fee params from RateModelParams (read on-chain by the
+    // adapter, persisted by collect-pools). psmFee is the real PSM swap fee
+    // on PSM rows; null on CDP vaults. redemptionFee is null for V2 CDP
+    // vaults — V2 redemption is dynamic/protocol-level, not a per-vault field,
+    // so the frontend labels it as protocol-level rather than faking it.
+    redemptionFee: r.redemptionFee,
+    psmFee: r.psmFee,
     minCR,
     risk: riskTier(r.utilization, r.borrowApy),
     spark: Array.from({ length: 30 }, () => r.totalSupplyUsd / 1e6),

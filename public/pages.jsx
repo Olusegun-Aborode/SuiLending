@@ -2613,8 +2613,8 @@ function PageMarketDetail() {
             <ParamRow k="Collateral Asset" v={marketSym} />
             <ParamRow k="Stablecoin Issued" v="USDB" />
             <ParamRow k="Interest Rate"     v={`${market.interestRate.toFixed(2)}%`} c="var(--red)" />
-            <ParamRow k="Redemption Fee"    v={market.redemptionFee != null ? `${market.redemptionFee.toFixed(2)}%` : '— (not indexed)'} c={market.redemptionFee == null ? 'var(--fg-muted)' : undefined} />
-            <ParamRow k="PSM Fee"           v={market.psmFee != null ? `${market.psmFee.toFixed(2)}%` : '— (not indexed)'} c={market.psmFee == null ? 'var(--fg-muted)' : undefined} />
+            <ParamRow k="Redemption Fee"    v={market.redemptionFee != null ? `${market.redemptionFee.toFixed(2)}%` : '— (protocol-level)'} c={market.redemptionFee == null ? 'var(--fg-muted)' : undefined} />
+            <ParamRow k="PSM Fee"           v={market.psmFee != null ? `${market.psmFee.toFixed(2)}%` : '— (n/a for CDP)'} c={market.psmFee == null ? 'var(--fg-muted)' : undefined} />
             <ParamRow k="Min Collateral Ratio" v={market.minCR != null ? `${market.minCR}%` : '—'} />
             <ParamRow k="Risk Tier"         v={<RiskChip risk={market.risk} />} />
           </div>
@@ -2654,7 +2654,7 @@ function PageMarketDetail() {
                       tag rather than fake it. Redemption / PSM fees aren't
                       indexed either (adapter doesn't persist them yet). */}
                   <ParamRow k="Peg Spread (USDB vs $1)" v="—" c="var(--fg-muted)" />
-                  <ParamRow k="Redemption Fee" v={market.redemptionFee != null ? `${market.redemptionFee.toFixed(2)}%` : '— (not indexed)'} c={market.redemptionFee == null ? 'var(--fg-muted)' : undefined} />
+                  <ParamRow k="Redemption Fee" v={market.redemptionFee != null ? `${market.redemptionFee.toFixed(2)}%` : '— (protocol-level)'} c={market.redemptionFee == null ? 'var(--fg-muted)' : undefined} />
                   <ParamRow k="Spot Price" v={fmtUSD(price, price < 10 ? 4 : 2)} />
                   <ParamRow k="Oracle (primary)" v={market.oracleSource || 'Pyth'} />
                   {(market.oracleSecondaries && market.oracleSecondaries.length > 0) && (

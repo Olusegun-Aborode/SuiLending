@@ -75,6 +75,19 @@ export async function GET(
       const ltv = num(pool.ltv);
       const liquidationThreshold = num(pool.liquidationThreshold);
       const irm = pool.irm;
+      // Bucket-only fee params. psmFee is real (read from the SDK swap fee);
+      // redemptionFee is reserved (V2 redemption is dynamic/protocol-level,
+      // adapter leaves it undefined).
+      //
+      // Three-state logic: `undefined` = not a PSM/Bucket row, leave the
+      // column alone. `null` = a PSM row whose fee is a disabled sentinel,
+      // WRITE null to clear any stale value. A number = a real fee, write it.
+      // We must distinguish undefined from null so a disabled PSM clears
+      // properly instead of keeping a stale 30000% from a prior run.
+      const psmProvided = pool.psmFee !== undefined;
+      const psmFee = pool.psmFee == null ? null : num(pool.psmFee);
+      const redemptionProvided = pool.redemptionFee !== undefined;
+      const redemptionFee = pool.redemptionFee == null ? null : num(pool.redemptionFee);
       try {
         await db.rateModelParams.upsert({
           where: { protocol_symbol: { protocol: slug, symbol: pool.symbol } },
@@ -95,6 +108,10 @@ export async function GET(
             // to zero on a transient adapter hiccup.
             ...(ltv > 0 ? { ltv } : {}),
             ...(liquidationThreshold > 0 ? { liquidationThreshold } : {}),
+            // Write the fee (incl. null) whenever the adapter provided one,
+            // so a disabled PSM clears a stale value.
+            ...(psmProvided ? { psmFee } : {}),
+            ...(redemptionProvided ? { redemptionFee } : {}),
             updatedAt: new Date(),
           },
           create: {
@@ -107,6 +124,8 @@ export async function GET(
             reserveFactor:  num(irm?.reserveFactor),
             ltv,
             liquidationThreshold,
+            psmFee,
+            redemptionFee,
           },
         });
         rmpWritten += 1;

@@ -121,6 +121,20 @@ export interface NormalizedPool {
    */
   irm?: IrmParams;
 
+  /**
+   * CDP / PSM fee params, as whole percent. Only Bucket populates these:
+   *   - psmFee: real PSM swap fee (read from the SDK's feeRate). Present on
+   *     PSM rows; undefined on CDP vaults and non-Bucket protocols.
+   *   - redemptionFee: Bucket V2 redemption is dynamic and protocol-level,
+   *     not a clean per-vault field, so this is left undefined for V2 CDP
+   *     vaults (the UI labels it as protocol-level rather than faking a
+   *     per-vault number). Reserved here for when a real per-vault value
+   *     becomes available.
+   * Persisted in RateModelParams alongside the IRM params.
+   */
+  psmFee?: number | null;
+  redemptionFee?: number | null;
+
   price: number;
 }
 
