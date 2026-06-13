@@ -45,7 +45,7 @@ function ChartWatermark({ x, y }) {
   return (
     <text x={x} y={y} textAnchor="end" fontFamily="var(--font-mono)"
       fontSize="11" fill="var(--fg-muted)" opacity="0.14" style={{ pointerEvents: 'none', letterSpacing: '0.12em' }}>
-      DATUM LABS · AETHER
+      DATUM LABS · SUI LENDING
     </text>
   );
 }
