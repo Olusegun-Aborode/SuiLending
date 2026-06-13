@@ -10,11 +10,11 @@ The Sui lending sector opened May at $446.73M of TVL and closed at $438.67M, a n
 
 **What this covers.** The five materially significant Sui lending venues as of May 2026: NAVI, Suilend, Scallop, AlphaLend, and Bucket. NAVI, Suilend, Scallop and AlphaLend are pool-archetype protocols. Bucket is a CDP issuing USDB (its V2 stablecoin, alongside the legacy BUCK that still circulates separately). DefiLlama also lists smaller Sui lending entries (Current at roughly $10M, OmniBTC at roughly $2M) which we exclude on materiality grounds. Together the five named cover 159 active markets.
 
-**What we measure and where it comes from.** Daily TVL through May comes from DefiLlama, which we pin as canonical for cross-protocol comparison because their per-protocol totals are calibrated against each protocol's own UI. Sector composition (supply, borrow, per-asset risk parameters, market counts) comes from each protocol's own on-chain state, indexed daily by our crons into PoolSnapshot and RateModelParams. Liquidation events come straight from Sui RPC and are filtered at $1 USD to drop sub-dollar micro-events that round to zero in display.
+**What we measure and where it comes from.** Daily TVL through May comes from DefiLlama, which we pin as canonical for cross-protocol comparison because their per-protocol totals are calibrated against each protocol's own UI. Sector composition (supply, borrow, per-asset risk parameters, market counts) comes from each protocol's own on-chain state, indexed daily by our crons into PoolSnapshot and RateModelParams. Liquidation events come straight from Sui RPC and are filtered with a $1 USD floor applied as an OR across the two legs: an event is kept if either the debt repaid or the collateral seized is at least $1. This drops sub-dollar bot micro-events while retaining genuine liquidations whose debt leg is dust but whose collateral leg is material, which is common on AlphaLend (debt-only filtering would keep 122 of its events; the OR filter keeps 206).
 
 **What we do not measure.** Per-wallet positions are not indexed across all five protocols. Without them there is no honest health-factor distribution, no real liquidation probability, no per-borrower concentration. We removed those panels from the dashboard rather than ship a market-aggregate proxy that reads as risk and is in fact a utilisation ratio.
 
-**Coverage caveats.** NAVI is the only protocol with full asset-level daily history for May. The other four have 16-18 days each at the per-asset granularity. Protocol-level trajectory comes from DefiLlama and is complete for every day May 1 through 31. Where this report goes deep at the market level, it goes deep on NAVI; for the other four we hold to protocol-level claims.
+**Coverage caveats.** NAVI is the only protocol with full asset-level daily history for May (all 31 days). The other four have only 5 to 7 days each at the per-asset granularity, and those days cluster at the start (1-2 May) and the end (28-31 May) of the month with nothing in between (Suilend has a single stray mid-month read on 4 May). Any per-asset claim about the four non-NAVI protocols mid-month, including parts of the 4 May distress week, therefore rests on month-boundary reads or interpolation, not on daily observation. Protocol-level trajectory comes from DefiLlama and is complete for every day May 1 through 31. Where this report goes deep at the market level, it goes deep on NAVI; for the other four we hold to protocol-level claims.
 
 ---
 
@@ -46,7 +46,9 @@ The next-largest concentration is AlphaLend's top address at 29.6% (61 of 206), 
 
 ### 07 · Borrows are denominated in stablecoins; collateral is split across more assets than the narrative suggests
 **Stablecoins are 46.7% of sector borrow, but SUI and its derivatives are only 32.3% of collateral.**
-USDC, USDT, USDB, AUSD, BUCK and FDUSD together represent $98.9M of the $211.7M borrowed across the sector. The collateral side is more diversified than the typical "SUI lending market" story implies: SUI, vSUI, haSUI, sSUI and afSUI sum to $189.4M of the $586.8M supplied, with the remaining two-thirds spread across stablecoins (which are also supplied as collateral), BTC-class assets (WBTC, MBTC, LBTC, enzoBTC, stBTC) and a long tail of ecosystem tokens. The narrative "structurally long SUI, financed against stablecoins" understates the stablecoin side and overstates the SUI side.
+The dollar stablecoins (USDC, USDT and suiUSDT, USDB and USDSUI, AUSD, BUCK and FDUSD) together represent $98.9M of the $211.7M borrowed across the sector. The collateral side is more diversified than the typical "SUI lending market" story implies: SUI, vSUI, haSUI, sSUI and afSUI sum to $189.4M of the $586.8M supplied, with the remaining two-thirds spread across stablecoins (which are also supplied as collateral), BTC-class assets (WBTC, MBTC, LBTC, enzoBTC, stBTC) and a long tail of ecosystem tokens. The narrative "structurally long SUI, financed against stablecoins" understates the stablecoin side and overstates the SUI side.
+
+These two composition shares are point-in-time reads at 31 May. They reproduce from a dedicated 31 May per-asset query (the `verify-may31-state.ts` script), which is how they were derived; they do **not** reproduce from a month-average view, which lands at roughly 45.0% stablecoin-borrow and 33.8% SUI-family supply. The published May data workbook carries month-averages, so confirm these figures against the 31 May pull, not the workbook's summary tab.
 
 ### 08 · Borrow-only markets
 **Six NAVI markets sit in the Isolated Markets tier with collateral-LTV of 0% and liquidation thresholds of 45-85%.**
@@ -88,7 +90,7 @@ Liquidator concentration is the more interesting cross-protocol number. NAVI's t
 
 ## How the rate models actually look
 
-Liquidation thresholds for the five most-borrowed assets, as of end of May:
+Liquidation thresholds for the five most-borrowed assets. These rate-model parameters (LTV, liquidation threshold, reserve factor, IRM) are read from a current on-chain snapshot stamped 13 June 2026, not month-end: they are structural governance settings that move rarely, so a slightly-post-period read is representative, but it is a 13 June read, not a 31 May one.
 
 | Asset | NAVI | Suilend | Scallop | AlphaLend |
 |-------|-----:|--------:|--------:|----------:|
