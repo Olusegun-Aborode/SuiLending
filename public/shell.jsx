@@ -153,7 +153,7 @@ function StatusBar() {
   const checkpointTs = asOf?.checkpointTimestamp;
   const serverTime = asOf?.serverTime;
   const ageSec = checkpointTs ? Math.max(0, Math.round((Date.now() - new Date(checkpointTs).getTime()) / 1000)) : null;
-  const ageStr = ageSec == null ? '—'
+  const ageStr = ageSec == null ? 'n/a'
     : ageSec < 60 ? `${ageSec}s ago`
     : ageSec < 3600 ? `${Math.round(ageSec / 60)}m ago`
     : `${Math.round(ageSec / 3600)}h ago`;
@@ -175,15 +175,15 @@ function StatusBar() {
       </div>
       <div className="right">
         <span title={checkpointTs ? `checkpoint timestamp: ${checkpointTs} UTC` : 'checkpoint timestamp unavailable'}>
-          checkpoint {checkpoint ? `#${checkpoint.toLocaleString()}` : '—'}
+          checkpoint {checkpoint ? `#${checkpoint.toLocaleString()}` : 'n/a'}
         </span>
         <span className="sep">│</span>
         <span style={{ color: ageSec != null && ageSec > 600 ? 'var(--orange)' : 'var(--fg-muted)' }}
-              title={`server time: ${serverTime ?? '—'}`}>
+              title={`server time: ${serverTime ?? 'n/a'}`}>
           {ageStr}
         </span>
         <span className="sep">│</span>
-        <span title={`RPC source: ${asOf?.rpcSource ?? '—'}`}>Sui mainnet</span>
+        <span title={`RPC source: ${asOf?.rpcSource ?? 'n/a'}`}>Sui mainnet</span>
       </div>
     </div>
   );

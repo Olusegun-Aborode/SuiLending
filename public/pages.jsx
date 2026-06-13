@@ -831,7 +831,7 @@ function PageOverview() {
   // the user spotted (586.8 − 211.7 = 375.1 ≠ 426.5) is documented at
   // the source.
   const tvlBreakdownNote = (D.protocolMetrics || [])
-    .map(p => `• ${p.id} — ${(p.tvlMethod || 'gross').toUpperCase()}: $${(p.tvl).toFixed(1)}M`)
+    .map(p => `• ${p.id}, ${(p.tvlMethod || 'gross').toUpperCase()}: $${(p.tvl).toFixed(1)}M`)
     .join('\n');
   const tvlNote = `TVL sums per-protocol methods (mixed basis):\n${tvlBreakdownNote}\n\nThis sum does NOT equal Supplied − Borrowed because each protocol's UI reports a different TVL definition (some net, some gross, some via remote canonical fetch). We match each protocol's own headline number, then sum. See Methodology page for the per-protocol calibration.`;
 
@@ -872,7 +872,7 @@ function PageOverview() {
             const chgPct = firstTotal > 0 ? ((lastTotal - firstTotal) / firstTotal * 100) : 0;
             const dir = chgPct > 1 ? 'rising' : chgPct < -1 ? 'falling' : 'flat';
             // Decision: monitor sector trend; widen/narrow risk overlays if sharp move.
-            return `Sector ${metric} ${dir} ${Math.abs(chgPct).toFixed(1)}% over ${timeframe}D — current $${lastTotal.toFixed(1)}M across ${sel.length} protocols. Re-run risk overlays if Δ > 20%.`;
+            return `Sector ${metric} ${dir} ${Math.abs(chgPct).toFixed(1)}% over ${timeframe}D, current $${lastTotal.toFixed(1)}M across ${sel.length} protocols. Re-run risk overlays if Δ > 20%.`;
           }}
           csvBuilder={({ proto, metric, timeframe }) => {
             const src = D.tvlMetricSeries[metric] || D.tvlSeries;
@@ -913,7 +913,7 @@ function PageOverview() {
           title="Protocol Mix"
           className="col-4"
           protocolMode="none"
-          description="Treemap of each protocol's share of today's total. Tile area is proportional to the protocol's value for the chosen metric — switch between TVL, Supplied, and Borrowed to see how the mix shifts. Hover any tile for exact value and percentage share."
+          description="Treemap of each protocol's share of today's total. Tile area is proportional to the protocol's value for the chosen metric. Switch between TVL, Supplied, and Borrowed to see how the mix shifts. Hover any tile for exact value and percentage share."
           source="protocolMetrics (live on-chain / native APIs, Bucket via DefiLlama)"
           shareId="overview.protocol-mix"
           insight={({ metric }) => {
@@ -927,7 +927,7 @@ function PageOverview() {
             const top2Pct = items.slice(0, 2).reduce((s, x) => s + x.value, 0) / total * 100;
             const concentration = top1Pct > 60 ? 'highly concentrated' : top1Pct > 40 ? 'concentrated' : 'diffuse';
             // Decision: concentration changes signal where to focus protocol-specific risk overlays.
-            return `${items[0].name} leads at ${top1Pct.toFixed(0)}%; top 2 = ${top2Pct.toFixed(0)}%. Mix is ${concentration} — focus risk overlays on ${items[0].name}.`;
+            return `${items[0].name} leads at ${top1Pct.toFixed(0)}%; top 2 = ${top2Pct.toFixed(0)}%. Mix is ${concentration}. Focus risk overlays on ${items[0].name}.`;
           }}
           csvBuilder={({ metric }) => D.protocols.map(p => {
             const m = D.protocolMetrics.find(x => x.id === p.id);
@@ -975,7 +975,7 @@ function PageOverview() {
             const liqFlag = liqShare > 5 ? '⚠ elevated liquidation share' : 'liquidation share normal';
             // Decision: spike in liquidation share = follow up on Risk page; quiet flows = check
             // protocol incentive efficiency on Revenue page.
-            return `${timeframe}D total: supply $${sumSup.toFixed(0)}M, borrow $${sumBor.toFixed(0)}M, liq $${sumLiq.toFixed(1)}M (${liqShare.toFixed(2)}% of borrows) — ${liqFlag}.`;
+            return `${timeframe}D total: supply $${sumSup.toFixed(0)}M, borrow $${sumBor.toFixed(0)}M, liq $${sumLiq.toFixed(1)}M (${liqShare.toFixed(2)}% of borrows), ${liqFlag}.`;
           }}
           csvBuilder={({ metric, timeframe }) => {
             const sliced = D.volumeSeries.slice(-timeframe);
@@ -1164,6 +1164,7 @@ function ProtocolComparisonTable() {
           click any column to sort
         </span>
       </div>
+      <div className="panel-caption">Every protocol side by side on the headline metrics. The fastest read on who leads on size, rates and revenue.</div>
       <div className="panel-body" style={{ padding: '0 16px 16px' }}>
         <DataTable
           columns={columns}
@@ -1272,7 +1273,7 @@ function PageProtocol() {
   return (
     <PageShell
       pageId="protocol"
-      title={`${proto.name} — ${proto.archetype === 'pool' ? 'Pool-Based Lending' : 'Collateralized Debt Position'}`}
+      title={`${proto.name}: ${proto.archetype === 'pool' ? 'Pool-Based Lending' : 'Collateralized Debt Position'}`}
       terminal={`protocol-${active}`}
     >
       <ProtocolTabs active={active} protocols={D.protocols} onChange={onProtocolChange} />
@@ -1343,6 +1344,7 @@ function PageProtocol() {
 
       <div className="panel" style={{ marginTop: 16 }}>
         <div className="panel-header"><span className="panel-title"><span className="bullet">●</span> Markets in {proto.name}</span></div>
+        <div className="panel-caption">Every market this protocol runs, with its size and rates. The granular view behind the protocol's headline totals.</div>
         <div className="panel-body" style={{ overflowX: 'auto' }}>
           {isPool ? (
             <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
@@ -1407,8 +1409,8 @@ function PageProtocol() {
                     <td style={{ padding: 8 }}>{fmtUSD(m.collateralUsd * 1e6, 1)}</td>
                     <td style={{ padding: 8 }}>{fmtUSD(m.debtUsd * 1e6, 1)}</td>
                     <td style={{ padding: 8 }}>{m.interestRate.toFixed(2)}%</td>
-                    <td style={{ padding: 8 }}>{m.minCR != null ? `${m.minCR}%` : '—'}</td>
-                    <td style={{ padding: 8 }}>{m.redemptionFee != null ? `${m.redemptionFee.toFixed(2)}%` : '—'}</td>
+                    <td style={{ padding: 8 }}>{m.minCR != null ? `${m.minCR}%` : 'n/a'}</td>
+                    <td style={{ padding: 8 }}>{m.redemptionFee != null ? `${m.redemptionFee.toFixed(2)}%` : 'n/a'}</td>
                     <td style={{ padding: 8 }}><RiskChip risk={m.risk} /></td>
                     <td style={{ padding: 8, color: 'var(--fg-muted)' }}>›</td>
                   </tr>
@@ -1437,7 +1439,7 @@ function PageRates() {
   const avgUtil   = weighted(D.pools, 'util', 'supply');
 
   return (
-    <PageShell pageId="rates" title="Rates — Supply, Borrow, Utilization" terminal="lending-terminal-sui-rates">
+    <PageShell pageId="rates" title="Rates: Supply, Borrow, Utilization" terminal="lending-terminal-sui-rates">
       <KpiStrip items={[
         { id: 'sup',  label: 'Weighted Avg Supply APY', value: `${avgSupply.toFixed(2)}%`, change: 0.18, subLabel: 'across pool protocols' },
         { id: 'bor',  label: 'Weighted Avg Borrow APY', value: `${avgBorrow.toFixed(2)}%`, change: 0.24, subLabel: 'across pool protocols' },
@@ -1553,9 +1555,9 @@ function PageRates() {
                             <td style={{ padding: 8 }}>{fmtUSD(m.collateralUsd * 1e6, 1)}</td>
                             <td style={{ padding: 8 }}>{fmtUSD(m.debtUsd * 1e6, 1)}</td>
                             <td style={{ padding: 8, color: 'var(--red)' }}>{m.interestRate.toFixed(2)}%</td>
-                            <td style={{ padding: 8 }}>{m.redemptionFee != null ? `${m.redemptionFee.toFixed(2)}%` : '—'}</td>
-                            <td style={{ padding: 8 }}>{m.psmFee != null ? `${m.psmFee.toFixed(2)}%` : '—'}</td>
-                            <td style={{ padding: 8 }}>{m.minCR != null ? `${m.minCR}%` : '—'}</td>
+                            <td style={{ padding: 8 }}>{m.redemptionFee != null ? `${m.redemptionFee.toFixed(2)}%` : 'n/a'}</td>
+                            <td style={{ padding: 8 }}>{m.psmFee != null ? `${m.psmFee.toFixed(2)}%` : 'n/a'}</td>
+                            <td style={{ padding: 8 }}>{m.minCR != null ? `${m.minCR}%` : 'n/a'}</td>
                             <td style={{ padding: 8, color: 'var(--fg-muted)' }}>›</td>
                           </tr>
                         ))}
@@ -1616,7 +1618,7 @@ function PageRevenue() {
   const realYieldSpread = stableSupplyApyAvg - FOUR_WEEK_TBILL_PCT;
 
   return (
-    <PageShell pageId="revenue" title="Revenue — Protocol Fees & Reserves" terminal="lending-terminal-sui-revenue">
+    <PageShell pageId="revenue" title="Revenue: Protocol Fees & Reserves" terminal="lending-terminal-sui-revenue">
       <KpiStrip items={[
         { id: 'r30',  label: 'Total Fees (30D)',  value: fmtUSD(totalFees30d, 2), change: 2.18, spark: D.kpiSparks.revenue.slice(-30) },
         { id: 'rann', label: 'Run-Rate (Annual)', value: fmtUSD(totalFeesAnnual, 1), change: 1.92 },
@@ -1712,7 +1714,7 @@ function PageRevenue() {
                         <td style={{ padding: 8, color: 'var(--green)' }}>{fmtUSD(r.fees30d, 2)}</td>
                         <td style={{ padding: 8 }}>{fmtUSD(r.feesAnnual, 1)}</td>
                         <td style={{ padding: 8, color: trColor }}>{r.takeRate.toFixed(2)}%</td>
-                        <td style={{ padding: 8 }}>{r.captureRate > 0 ? `${r.captureRate.toFixed(0)}%` : '—'}</td>
+                        <td style={{ padding: 8 }}>{r.captureRate > 0 ? `${r.captureRate.toFixed(0)}%` : 'n/a'}</td>
                       </tr>
                     );})}
                   </tbody>
@@ -1823,10 +1825,10 @@ function PageCollateral() {
   };
 
   return (
-    <PageShell pageId="collateral" title="Collateral — Composition & Concentration" terminal="lending-terminal-sui-collateral">
+    <PageShell pageId="collateral" title="Collateral: Composition & Concentration" terminal="lending-terminal-sui-collateral">
       <KpiStrip items={[
         { id: 'tot',  label: 'Total Collateral',  value: fmtUSD(totalCollat * 1e6, 1), change: 4.6, subLabel: 'across all protocols' },
-        { id: 'top',  label: 'Top Asset',         value: allAssetRows[0]?.sym ?? '—', change: 0, subLabel: `${top1Share.toFixed(1)}%` },
+        { id: 'top',  label: 'Top Asset',         value: allAssetRows[0]?.sym ?? 'n/a', change: 0, subLabel: `${top1Share.toFixed(1)}%` },
         // HHI per §4 Tier 3 — assets. Bands per the standard: >2500 highly
         // concentrated, 1500–2500 moderate, ≤1500 diffuse.
         { id: 'hhi',  label: 'Asset HHI', value: supplyHhi.toFixed(0), change: 0, subLabel: concentrationBand(supplyHhi).label },
@@ -1845,14 +1847,14 @@ function PageCollateral() {
               <InfoTip>
                 How crowded the sector's collateral is on a handful of assets.
                 {' '}If one asset crashes, lenders backing that asset eat
-                {' '}most of the loss. HHI = Σ(share%)² across assets — &gt;2500 highly
+                {' '}most of the loss. HHI = Σ(share%)² across assets, &gt;2500 highly
                 {' '}concentrated, 1500–2500 moderate, ≤1500 diffuse.
               </InfoTip>
             </span>
             <ConcentrationChip hhi={supplyHhi} />
           </div>
           <div className="panel-caption">
-            <b>How crowded the sector's collateral is on a few assets.</b> A crash in one concentrated asset is borne by the lenders backing it — diffuse collateral spreads that risk.
+            <b>How crowded the sector's collateral is on a few assets.</b> A crash in one concentrated asset is borne by the lenders backing it. Spreading collateral across many assets dilutes that risk.
           </div>
           <div className="panel-body">
             {/* Re-labelled MiniStats — plain English. Old labels were
@@ -1860,7 +1862,7 @@ function PageCollateral() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 18 }}>
               <MiniStat label="Largest asset"  value={`${top1Share.toFixed(1)}%`}
                 color={top1Share > 50 ? 'var(--red)' : top1Share > 30 ? 'var(--orange)' : 'var(--fg)'}
-                sub={allAssetRows[0]?.sym || '—'} />
+                sub={allAssetRows[0]?.sym || 'n/a'} />
               <MiniStat label="Top 3 combined" value={`${top3Share.toFixed(1)}%`} sub="of collateral" />
               <MiniStat label="Top 5 combined" value={`${top5Share.toFixed(1)}%`} sub="of collateral" />
               <MiniStat label="Number of assets" value={String(allAssetRows.length)} sub="indexed" />
@@ -1897,7 +1899,7 @@ function PageCollateral() {
             </span>
           </div>
           <div className="panel-caption">
-            <b>Pyth is primary at all five protocols.</b> The systemic risk is undocumented failover, not single-oracle dependence — secondaries exist but their weights and staleness thresholds aren't public.
+            <b>Pyth is primary at all five protocols.</b> The systemic risk is undocumented failover, not single-oracle dependence. Secondaries exist but their weights and staleness thresholds aren't public.
           </div>
           <div className="panel-body">
             <OracleConfigView
@@ -1988,7 +1990,7 @@ function PageCollateral() {
                               ? D.pools.filter(x => x.protocol === p.id && x.sym === r.sym).reduce((s,x)=>s+x.supply, 0)
                               : D.vaults.filter(x => x.protocol === p.id && x.sym === r.sym).reduce((s,x)=>s+x.collateralUsd, 0);
                             return <td key={p.id} style={{ padding: 8, color: inProto ? 'var(--fg)' : 'var(--fg-dim)' }}>
-                              {inProto ? fmtUSD(inProto * 1e6, 1) : '—'}
+                              {inProto ? fmtUSD(inProto * 1e6, 1) : 'n/a'}
                             </td>;
                           })}
                         </tr>
@@ -2108,11 +2110,11 @@ function PageRisk() {
     .slice(0, 10);
 
   return (
-    <PageShell pageId="risk" title="Lending Terminal: SUI — Risk" terminal="lending-terminal-sui-risk">
+    <PageShell pageId="risk" title="Lending Terminal: SUI Risk" terminal="lending-terminal-sui-risk">
       <KpiStrip items={[
         { id: 'lqi', label: 'Liq. intensity (30D)', value: `${liqIntensity.toFixed(2)}%`, change: 0, subLabel: 'debt liquidated ÷ TVL' },
-        { id: 'lqe', label: 'Liq. efficiency',      value: liqEfficiency > 0 ? `${liqEfficiency.toFixed(2)}×` : '—', change: 0, subLabel: 'collateral seized ÷ debt repaid' },
-        { id: 'dsi', label: 'Days since incident',  value: daysSinceLastIncident != null ? `${daysSinceLastIncident}d` : '—', change: 0, subLabel: 'last liquidation event' },
+        { id: 'lqe', label: 'Liq. efficiency',      value: liqEfficiency > 0 ? `${liqEfficiency.toFixed(2)}×` : 'n/a', change: 0, subLabel: 'collateral seized ÷ debt repaid' },
+        { id: 'dsi', label: 'Days since incident',  value: daysSinceLastIncident != null ? `${daysSinceLastIncident}d` : 'n/a', change: 0, subLabel: 'last liquidation event' },
         { id: 'hhi', label: 'Debt-side HHI',        value: debtHhi.toFixed(0), change: 0, subLabel: debtHhiBand.label, note: 'Concentration of live borrows by asset. Supply-side HHI is on the Collateral page.' },
       ]} />
 
@@ -2176,6 +2178,7 @@ function PageRisk() {
             <span className="panel-title"><span className="bullet">●</span> Liquidator leaderboard (30D)</span>
             <span style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>top {liquidators.length}</span>
           </div>
+          <div className="panel-caption">Who is doing the liquidating, by volume. A concentrated leaderboard means a few bots backstop the sector's solvency.</div>
           <div className="panel-body">
             {liquidators.length === 0 && (
               <div style={{ padding: '12px 0', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
@@ -2212,6 +2215,7 @@ function PageRisk() {
           <div className="panel-header">
             <span className="panel-title"><span className="bullet">●</span> Largest events (30D)</span>
           </div>
+          <div className="panel-caption">The biggest individual liquidations in the window. Outsized events flag where one large position or a thin market took the most damage.</div>
           <div className="panel-body">
             {largestEvents.length === 0 && (
               <div style={{ padding: '12px 0', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
@@ -2263,12 +2267,13 @@ function PageRisk() {
                 Which assets carry the most live borrows. Distinct from the
                 {' '}Collateral page's "Asset concentration", which measures what
                 {' '}<em>backs</em> the sector. This view shows what's actually
-                {' '}<em>exposed</em> — if these assets blow up, losses concentrate here.
+                {' '}<em>exposed</em>, if these assets blow up, losses concentrate here.
                 {' '}HHI bands: &gt;2500 highly concentrated, 1500–2500 moderate, ≤1500 diffuse.
               </InfoTip>
             </span>
             <ConcentrationChip hhi={debtHhi} />
           </div>
+          <div className="panel-caption">Which assets carry the most live borrows. If a crowded debt asset moves against borrowers, the liquidations land here.</div>
           <div className="panel-body">
             {totBorrow > 0 ? (
               <Leaderboard items={Object.entries(borrowByAsset)
@@ -2312,7 +2317,7 @@ function PageLiquidation() {
   const fmt = (s) => new Date(s).toLocaleString(undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 
   return (
-    <PageShell pageId="liquidation" title="Liquidations — Events & Severity" terminal="lending-terminal-sui-liquidation">
+    <PageShell pageId="liquidation" title="Liquidations: Events & Severity" terminal="lending-terminal-sui-liquidation">
       <KpiStrip items={[
         { id: 'cnt', label: 'Liquidations (30D)', value: fmtNum(allEvents.length, 0), change: -2.1, subLabel: 'count' },
         { id: 'rep', label: 'Total Debt Repaid',  value: fmtUSD(totalRepaid, 1), change: -3.4 },
@@ -2379,7 +2384,7 @@ function PageLiquidation() {
                       <th style={{ padding: 8 }}>Repaid</th>
                       <th style={{ padding: 8 }}>Seized</th>
                       <th style={{ padding: 8 }}>Bonus</th>
-                      <th style={{ padding: 8 }} title="HF at liquidation — not yet indexed for these events; rendered as '—' rather than a hardcoded 0.950 placeholder.">HF</th>
+                      <th style={{ padding: 8 }} title="HF at liquidation, not yet indexed for these events; rendered as 'n/a' rather than a hardcoded 0.950 placeholder.">HF</th>
                       <th style={{ padding: 8 }}>Borrower</th>
                     </tr>
                   </thead>
@@ -2394,7 +2399,7 @@ function PageLiquidation() {
                         <td style={{ padding: 6 }}>{fmtUSD(l.collateralSeizedUsd, 0)}</td>
                         <td style={{ padding: 6, color: 'var(--green)' }}>+{fmtUSD(l.bonusUsd, 0)}</td>
                         <td style={{ padding: 6, color: l.healthFactor != null && l.healthFactor < 0.9 ? 'var(--red)' : 'var(--fg-muted)' }}>
-                          {l.healthFactor != null ? l.healthFactor.toFixed(3) : '—'}
+                          {l.healthFactor != null ? l.healthFactor.toFixed(3) : 'n/a'}
                         </td>
                         <td style={{ padding: 6, color: 'var(--fg-muted)' }}>{l.borrower}</td>
                       </tr>
@@ -2455,7 +2460,7 @@ function PageMarketDetail() {
     const borrowTok = borrowUsd / price;
     const liqTok = liqUsd / price;
     // Cap percentages — null means cap data isn't available for this pool (per
-    // §3 of the analysis standard, we surface "—" rather than 0% to avoid
+    // §3 of the analysis standard, we surface "n/a" rather than 0% to avoid
     // implying full headroom we haven't verified).
     const supplyCapPct = market.supplyCap != null && market.supplyCap > 0 ? (supplyTok / market.supplyCap * 100) : null;
     const borrowCapPct = market.borrowCap != null && market.borrowCap > 0 ? (borrowTok / market.borrowCap * 100) : null;
@@ -2530,24 +2535,24 @@ function PageMarketDetail() {
               <ParamRow k="Reserve Factor"  v={`${(market.reserveFactor ?? 0).toFixed(1)}%`} />
               {/* Aggregate market Health Factor — see backend toPoolRow for
                   the formula. null = no borrows yet (HF is undefined / ∞);
-                  show "—" rather than misleading the user with a huge number.
+                  show "n/a" rather than misleading the user with a huge number.
                   Color-code <1 (liquidatable) red, 1-1.5 amber, ≥1.5 green. */}
               <ParamRow
                 k="Health Factor"
                 v={market.healthFactor == null
-                  ? '—'
+                  ? 'n/a'
                   : market.healthFactor.toFixed(2)}
                 c={market.healthFactor == null ? 'var(--fg-muted)'
                     : market.healthFactor < 1   ? 'var(--red)'
                     : market.healthFactor < 1.5 ? 'var(--orange)'
                     : 'var(--green)'}
               />
-              {/* Caps: render "—" when unknown rather than fake 0. Cap-used % uses
+              {/* Caps: render "n/a" when unknown rather than fake 0. Cap-used % uses
                   semantic risk colors per §6: >80% = red. */}
-              <ParamRow k="Supply Cap" v={market.supplyCap != null && market.supplyCap > 0 ? `${fmtNum(market.supplyCap, 0)} ${marketSym}` : '—'} />
-              <ParamRow k="Borrow Cap" v={market.borrowCap != null && market.borrowCap > 0 ? `${fmtNum(market.borrowCap, 0)} ${marketSym}` : '—'} />
-              <ParamRow k="Supply Cap Used" v={supplyCapPct != null ? `${supplyCapPct.toFixed(1)}%` : '—'} c={supplyCapPct != null && supplyCapPct > 80 ? 'var(--red)' : 'var(--fg)'} />
-              <ParamRow k="Borrow Cap Used" v={borrowCapPct != null ? `${borrowCapPct.toFixed(1)}%` : '—'} c={borrowCapPct != null && borrowCapPct > 80 ? 'var(--red)' : 'var(--fg)'} />
+              <ParamRow k="Supply Cap" v={market.supplyCap != null && market.supplyCap > 0 ? `${fmtNum(market.supplyCap, 0)} ${marketSym}` : 'n/a'} />
+              <ParamRow k="Borrow Cap" v={market.borrowCap != null && market.borrowCap > 0 ? `${fmtNum(market.borrowCap, 0)} ${marketSym}` : 'n/a'} />
+              <ParamRow k="Supply Cap Used" v={supplyCapPct != null ? `${supplyCapPct.toFixed(1)}%` : 'n/a'} c={supplyCapPct != null && supplyCapPct > 80 ? 'var(--red)' : 'var(--fg)'} />
+              <ParamRow k="Borrow Cap Used" v={borrowCapPct != null ? `${borrowCapPct.toFixed(1)}%` : 'n/a'} c={borrowCapPct != null && borrowCapPct > 80 ? 'var(--red)' : 'var(--fg)'} />
             </div>
           </div>
 
@@ -2562,10 +2567,10 @@ function PageMarketDetail() {
                 <ParamRow k="Oracle (secondary)" v={market.oracleSecondaries.join(', ')} />
               )}
               {/* Distinct-address counts — null means we don't index per-pool
-                  addresses for this protocol (currently only NAVI). Render "—"
+                  addresses for this protocol (currently only NAVI). Render "n/a"
                   to avoid claiming 0 users. */}
-              <ParamRow k="Suppliers" v={market.suppliers != null ? fmtNum(market.suppliers, 0) : '—'} />
-              <ParamRow k="Borrowers" v={market.borrowers != null ? fmtNum(market.borrowers, 0) : '—'} />
+              <ParamRow k="Suppliers" v={market.suppliers != null ? fmtNum(market.suppliers, 0) : 'n/a'} />
+              <ParamRow k="Borrowers" v={market.borrowers != null ? fmtNum(market.borrowers, 0) : 'n/a'} />
               <ParamRow k="Spot Price" v={fmtUSD(price, price < 10 ? 4 : 2)} />
             </div>
           </div>
@@ -2677,13 +2682,13 @@ function PageMarketDetail() {
         { id: 'col', label: 'Collateral Locked', value: fmtUSD(market.collateralUsd * 1e6, 2), change: 4.0, subLabel: `${fmtNum(market.collateralUsd * 1e6 / price, 1)} ${marketSym}` },
         { id: 'dbt', label: 'USDB Outstanding',  value: fmtUSD(market.debtUsd * 1e6, 2), change: 3.4 },
         // CR is undefined when debt = 0 — used to render as Infinity%. Guard
-        // the divide-by-zero and render "—" (consistent with HF for null-
+        // the divide-by-zero and render "n/a" (consistent with HF for null-
         // debt markets). minCR sub-label still displays so the parameter is
         // visible even when no positions are open.
         { id: 'cr',  label: 'Aggregate CR',
           value: market.debtUsd > 0
             ? `${(market.collateralUsd / market.debtUsd * 100).toFixed(0)}%`
-            : '—',
+            : 'n/a',
           change: 0,
           subLabel: market.debtUsd > 0 ? (market.minCR != null ? `min ${market.minCR}%` : 'CDP vault') : 'no debt outstanding' },
         { id: 'rate',label: 'Interest Rate',     value: `${market.interestRate.toFixed(2)}%`, change: 0 },
@@ -2698,7 +2703,7 @@ function PageMarketDetail() {
             <ParamRow k="Interest Rate"     v={`${market.interestRate.toFixed(2)}%`} c="var(--red)" />
             <ParamRow k="Redemption Fee"    v={market.redemptionFee != null ? `${market.redemptionFee.toFixed(2)}%` : '— (protocol-level)'} c={market.redemptionFee == null ? 'var(--fg-muted)' : undefined} />
             <ParamRow k="PSM Fee"           v={market.psmFee != null ? `${market.psmFee.toFixed(2)}%` : '— (n/a for CDP)'} c={market.psmFee == null ? 'var(--fg-muted)' : undefined} />
-            <ParamRow k="Min Collateral Ratio" v={market.minCR != null ? `${market.minCR}%` : '—'} />
+            <ParamRow k="Min Collateral Ratio" v={market.minCR != null ? `${market.minCR}%` : 'n/a'} />
             <ParamRow k="Risk Tier"         v={<RiskChip risk={market.risk} />} />
           </div>
         </div>
@@ -2713,7 +2718,7 @@ function PageMarketDetail() {
               //     stay materially above the min collateral ratio)
               //   - Peg / redemption spread = debt-token market price vs $1 target.
               //     Bucket's USDB / BUCK market prices on Sui DEXs aren't yet indexed
-              //     in our pipeline; rendered "—" with a "not indexed" tag to avoid
+              //     in our pipeline; rendered "n/a" with a "not indexed" tag to avoid
               //     fabricating, per §1.2 / §8.C ("no un-sourced figure ships").
               const surplusUsdM = market.collateralUsd - market.debtUsd;
               const backingRatio = market.debtUsd > 0 ? market.collateralUsd / market.debtUsd * 100 : null;
@@ -2727,16 +2732,16 @@ function PageMarketDetail() {
                                  'var(--green)';
               return (
                 <>
-                  <ParamRow k="Backing Ratio (CR)" v={backingRatio != null ? `${backingRatio.toFixed(1)}%` : '—'} c={ratioColor} />
-                  <ParamRow k="Min CR (liquidation)" v={market.minCR != null ? `${market.minCR}%` : '—'} />
-                  <ParamRow k="Headroom over Min CR" v={headroomPP != null ? `${headroomPP.toFixed(1)}pp` : '—'} />
+                  <ParamRow k="Backing Ratio (CR)" v={backingRatio != null ? `${backingRatio.toFixed(1)}%` : 'n/a'} c={ratioColor} />
+                  <ParamRow k="Min CR (liquidation)" v={market.minCR != null ? `${market.minCR}%` : 'n/a'} />
+                  <ParamRow k="Headroom over Min CR" v={headroomPP != null ? `${headroomPP.toFixed(1)}pp` : 'n/a'} />
                   <ParamRow k="Surplus / Backing Buffer" v={fmtUSD(surplusUsdM * 1e6, 2)} c={surplusColor} />
                   <ParamRow k="USDB / Collateral (Util)" v={`${(market.debtUsd / Math.max(market.collateralUsd, 1e-9) * 100).toFixed(1)}%`} />
                   {/* Peg / redemption spread per §4 CDP variants. USDB/BUCK
-                      market price not yet indexed; render "—" with a not-indexed
+                      market price not yet indexed; render "n/a" with a not-indexed
                       tag rather than fake it. Redemption / PSM fees aren't
                       indexed either (adapter doesn't persist them yet). */}
-                  <ParamRow k="Peg Spread (USDB vs $1)" v="—" c="var(--fg-muted)" />
+                  <ParamRow k="Peg Spread (USDB vs $1)" v="n/a" c="var(--fg-muted)" />
                   <ParamRow k="Redemption Fee" v={market.redemptionFee != null ? `${market.redemptionFee.toFixed(2)}%` : '— (protocol-level)'} c={market.redemptionFee == null ? 'var(--fg-muted)' : undefined} />
                   <ParamRow k="Spot Price" v={fmtUSD(price, price < 10 ? 4 : 2)} />
                   <ParamRow k="Oracle (primary)" v={market.oracleSource || 'Pyth'} />

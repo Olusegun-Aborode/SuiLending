@@ -173,7 +173,7 @@ async function snapshotPanel(panelEl, filename = 'chart.png') {
     ctx.fillRect(0, 0, rect.width, rect.height);
     ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--fg').trim() || '#111';
     ctx.font = '600 14px "IBM Plex Sans", sans-serif';
-    ctx.fillText('datumlabs — chart snapshot', 20, 26);
+    ctx.fillText('datumlabs chart snapshot', 20, 26);
     ctx.font = '11px "JetBrains Mono", monospace';
     ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--fg-muted').trim() || '#666';
     ctx.fillText(new Date().toISOString(), 20, 44);
@@ -380,7 +380,7 @@ function DataSourceBadge({ source, lastUpdated, cached, tone = 'green' }) {
     return () => clearInterval(id);
   }, [lastUpdated]);
   const ageLabel = (() => {
-    if (!lastUpdated) return '—';
+    if (!lastUpdated) return 'n/a';
     const ageMin = Math.max(0, Math.round((Date.now() - lastUpdated) / 60000));
     if (ageMin < 1) return 'just now';
     if (ageMin < 60) return `${ageMin}m ago`;
@@ -438,7 +438,7 @@ function IntegrityPanel() {
   const ageSec = asOf?.checkpointTimestamp
     ? Math.max(0, Math.round((Date.now() - new Date(asOf.checkpointTimestamp).getTime()) / 1000))
     : null;
-  const ageStr = ageSec == null ? '—'
+  const ageStr = ageSec == null ? 'n/a'
     : ageSec < 60 ? `${ageSec}s ago`
     : ageSec < 3600 ? `${Math.round(ageSec / 60)}m ago`
     : `${Math.round(ageSec / 3600)}h ago`;
@@ -453,7 +453,7 @@ function IntegrityPanel() {
             {pill.label.toUpperCase()}
           </span>
           <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
-            as of checkpoint {asOf?.checkpoint ? `#${asOf.checkpoint.toLocaleString()}` : '—'} ({ageStr})
+            as of checkpoint {asOf?.checkpoint ? `#${asOf.checkpoint.toLocaleString()}` : 'n/a'} ({ageStr})
           </span>
         </span>
         <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--fg-muted)' }}>
@@ -482,7 +482,7 @@ function IntegrityPanel() {
             })}
           </div>
           <div style={{ marginTop: 8, fontSize: 10, color: 'var(--fg-dim)', fontFamily: 'var(--font-mono)', textAlign: 'right' }}>
-            DeFi Lending Analysis Standard §3 · source: {asOf?.rpcSource || '—'}
+            DeFi Lending Analysis Standard §3 · source: {asOf?.rpcSource || 'n/a'}
           </div>
         </div>
       )}
