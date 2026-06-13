@@ -676,7 +676,7 @@ function ChartPanel({
       <div className={`panel ${className}`} ref={ref}>
         <div className="panel-header">
           <span className="panel-title">
-            <span className="bullet">●</span> {resolvedTitle}
+            {resolvedTitle}
             {/* Single header ⓘ that carries everything: chart description,
                 source provenance, and the as-of timestamp. Replaces the old
                 stacked footer (insight line + source row + as-of row) that
@@ -1144,7 +1144,7 @@ function ProtocolComparisonTable() {
     <div className="panel">
       <div className="panel-header">
         <span className="panel-title">
-          <span className="bullet">●</span> Protocol comparison
+          Protocol comparison
           <InfoTip>
             Side-by-side headline metrics for every protocol. Click any column
             header to re-sort. Protocol name links to that protocol's deep-dive
@@ -1336,7 +1336,7 @@ function PageProtocol() {
       </div>
 
       <div className="panel" style={{ marginTop: 16 }}>
-        <div className="panel-header"><span className="panel-title"><span className="bullet">●</span> Markets in {proto.name}</span></div>
+        <div className="panel-header"><span className="panel-title">Markets in {proto.name}</span></div>
         <div className="panel-caption">Every market this protocol runs, with its size and rates. The granular view behind the protocol's headline totals.</div>
         <div className="panel-body" style={{ overflowX: 'auto' }}>
           {isPool ? (
@@ -1836,7 +1836,7 @@ function PageCollateral() {
         <div className="panel col-6">
           <div className="panel-header">
             <span className="panel-title">
-              <span className="bullet">●</span> Asset concentration
+              Asset concentration
               <InfoTip>
                 How crowded the sector's collateral is on a handful of assets.
                 {' '}If one asset crashes, lenders backing that asset eat
@@ -1876,7 +1876,7 @@ function PageCollateral() {
         <div className="panel col-6">
           <div className="panel-header">
             <span className="panel-title">
-              <span className="bullet">●</span> Oracle configuration
+              Oracle configuration
               <InfoTip>
                 Which price oracles each protocol uses. Pyth is the primary
                 {' '}feed at every protocol; most document a secondary
@@ -2122,7 +2122,7 @@ function PageRisk() {
         <div className="panel" style={{ borderStyle: 'dashed' }}>
           <div className="panel-header">
             <span className="panel-title">
-              <span className="bullet" style={{ color: 'var(--fg-muted)' }}>○</span> Position-level risk
+              Position-level risk
               <InfoTip>
                 Real Health Factor distribution, collateral-at-risk under
                 price shocks, and Monte Carlo loss simulations all require
@@ -2168,7 +2168,7 @@ function PageRisk() {
         {/* Liquidator leaderboard */}
         <div className="panel col-6">
           <div className="panel-header">
-            <span className="panel-title"><span className="bullet">●</span> Liquidator leaderboard (30D)</span>
+            <span className="panel-title">Liquidator leaderboard (30D)</span>
             <span style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>top {liquidators.length}</span>
           </div>
           <div className="panel-caption">Who is doing the liquidating, by volume. A concentrated leaderboard means a few bots backstop the sector's solvency.</div>
@@ -2206,7 +2206,7 @@ function PageRisk() {
         {/* Largest events */}
         <div className="panel col-6">
           <div className="panel-header">
-            <span className="panel-title"><span className="bullet">●</span> Largest events (30D)</span>
+            <span className="panel-title">Largest events (30D)</span>
           </div>
           <div className="panel-caption">The biggest individual liquidations in the window. Outsized events flag where one large position or a thin market took the most damage.</div>
           <div className="panel-body">
@@ -2255,7 +2255,7 @@ function PageRisk() {
         <div className="panel">
           <div className="panel-header">
             <span className="panel-title">
-              <span className="bullet">●</span> Debt-side concentration
+              Debt-side concentration
               <InfoTip>
                 Which assets carry the most live borrows. Distinct from the
                 {' '}Collateral page's "Asset concentration", which measures what
@@ -2494,7 +2494,7 @@ function PageMarketDetail() {
         {/* Three side-by-side parameter cards */}
         <div className="grid grid-12" style={{ marginTop: 16 }}>
           <div className="panel col-4">
-            <div className="panel-header"><span className="panel-title"><span className="bullet">●</span> Interest Rates</span></div>
+            <div className="panel-header"><span className="panel-title">Interest Rates</span></div>
             <div className="panel-body">
               <ParamRow k="Supply APY" v={`${market.supplyApy.toFixed(2)}%`} c="var(--green)" />
               <ParamRow k="Borrow APY" v={`${market.borrowApy.toFixed(2)}%`} c="var(--red)" />
@@ -2517,7 +2517,7 @@ function PageMarketDetail() {
 
           <div className="panel col-4">
             <div className="panel-header">
-              <span className="panel-title"><span className="bullet">●</span> Risk Parameters</span>
+              <span className="panel-title">Risk Parameters</span>
               {((market.ltv ?? 0) === 0 && (market.liqThreshold ?? 0) > 0) && (
                 <span title="Borrow-only market: this asset can be borrowed but cannot be posted as collateral. LT still applies to any existing collateralized position." style={{ fontSize: 10, padding: '2px 8px', borderRadius: 2, background: 'var(--bg-soft)', color: 'var(--fg-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', fontFamily: 'var(--font-mono)' }}>borrow-only</span>
               )}
@@ -2550,7 +2550,7 @@ function PageMarketDetail() {
           </div>
 
           <div className="panel col-4">
-            <div className="panel-header"><span className="panel-title"><span className="bullet">●</span> Market Info</span></div>
+            <div className="panel-header"><span className="panel-title">Market Info</span></div>
             <div className="panel-body">
               <ParamRow k="Asset" v={marketSym} />
               <ParamRow k="Protocol" v={proto.name} />
@@ -2689,7 +2689,7 @@ function PageMarketDetail() {
 
       <div className="grid grid-12" style={{ marginTop: 16 }}>
         <div className="panel col-6">
-          <div className="panel-header"><span className="panel-title"><span className="bullet">●</span> Vault Parameters</span></div>
+          <div className="panel-header"><span className="panel-title">Vault Parameters</span></div>
           <div className="panel-body">
             <ParamRow k="Collateral Asset" v={marketSym} />
             <ParamRow k="Stablecoin Issued" v="USDB" />
@@ -2702,7 +2702,7 @@ function PageMarketDetail() {
         </div>
 
         <div className="panel col-6">
-          <div className="panel-header"><span className="panel-title"><span className="bullet">●</span> Health Metrics</span></div>
+          <div className="panel-header"><span className="panel-title">Health Metrics</span></div>
           <div className="panel-body">
             {(() => {
               // CDP variants per §4 of the analysis standard:

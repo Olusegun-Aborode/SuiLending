@@ -40,7 +40,6 @@ function Topbar({ title, onOpenCmdk, theme, setTheme }) {
           <span className="topbar-brand-name">datum<span style={{ color: 'var(--orange)' }}>labs</span></span>
         </div>
         <span className="topbar-terminal">
-          <span className="prompt">❯</span>
           <span>{title}</span>
         </span>
       </div>
@@ -152,7 +151,6 @@ function StatusBar() {
   return (
     <div className="statusbar">
       <div className="left">
-        <span style={{ color: 'var(--orange)' }}>❯</span>
         <span>datumlabs.xyz / lending-terminal-sui</span>
         <span className="sep">│</span>
         <span>cache: <span style={{ color: cacheOk ? 'var(--green)' : 'var(--red)' }}>{cacheOk ? 'healthy' : 'degraded'}</span></span>
@@ -232,7 +230,6 @@ function CommandPalette({ open, onClose, protocols, pools }) {
     <div className={`cmdk-backdrop ${open ? 'open' : ''}`} onClick={onClose}>
       <div className="cmdk" onClick={e => e.stopPropagation()}>
         <div className="cmdk-input-row">
-          <span style={{ color: 'var(--fg-muted)' }}>❯</span>
           <input ref={inputRef} value={q} onChange={e => { setQ(e.target.value); setActive(0); }} onKeyDown={onKey} placeholder="Search or jump to…" />
           <kbd style={{ fontSize: 10, color: 'var(--fg-dim)' }}>ESC</kbd>
         </div>
