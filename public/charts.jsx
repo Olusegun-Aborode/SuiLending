@@ -95,7 +95,10 @@ function AreaChart({ series, stacked = false, width = 800, height = 280, formatt
       series.forEach(s => s.values.forEach(v => m = Math.max(m, v)));
       if (overlayCompare) overlayCompare.forEach(s => s.values.forEach(v => m = Math.max(m, v)));
     }
-    return m * 1.1;
+    // Zero-floor: an all-zero (or no-data) series gives m=0, and dividing by a
+    // zero maxY in y() yields NaN coordinates and a broken path. Fall back to a
+    // unit scale so the series renders as a flat line on the baseline instead.
+    return m > 0 ? m * 1.1 : 1;
   }, [series, stacked, len, overlayCompare]);
 
   const x = (i) => padL + (i / (len - 1)) * iw;
@@ -268,7 +271,11 @@ function StackedBarChart({ data, keys, colors, width = 800, height = 220, format
   const [hover, setHover] = useState(null);
 
   const totals = data.map(d => keys.reduce((a, k) => a + d[k], 0));
-  const maxY = Math.max(...totals) * 1.1;
+  // Zero-floor: all-zero (or empty) data gives a 0 / -Infinity max, which makes
+  // y() divide by zero and the bars/ticks render as NaN. Fall back to a unit
+  // scale so an empty series shows flat bars on the baseline instead.
+  const rawMax = totals.length ? Math.max(...totals) : 0;
+  const maxY = rawMax > 0 ? rawMax * 1.1 : 1;
   const n = data.length;
   const colW = iw / n;             // total column width (bar + gap)
   const bw = colW * 0.7;
