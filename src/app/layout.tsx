@@ -1,6 +1,5 @@
 import type { Metadata } from 'next';
 import { JetBrains_Mono, IBM_Plex_Sans } from 'next/font/google';
-import { Providers } from '@/components/Providers';
 import './globals.css';
 
 const jetbrainsMono = JetBrains_Mono({
@@ -15,8 +14,8 @@ const ibmPlex = IBM_Plex_Sans({
 });
 
 export const metadata: Metadata = {
-  title: 'NAVI Lending Terminal — Datum Labs',
-  description: 'Real-time NAVI Protocol lending analytics on Sui',
+  title: 'State of Lending on Sui — Datum Labs',
+  description: 'Live lending analytics across NAVI, Suilend, Scallop, AlphaLend and Bucket on Sui',
 };
 
 /**
@@ -52,7 +51,7 @@ export default function RootLayout({
         className={`${jetbrainsMono.variable} ${ibmPlex.variable} antialiased min-h-screen`}
       >
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
-        <Providers>{children}</Providers>
+        {children}
       </body>
     </html>
   );
