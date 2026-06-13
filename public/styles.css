@@ -8,7 +8,7 @@
  */
 
 /* ─── Fonts ─── */
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 :root {
   --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
@@ -220,68 +220,27 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .caps { text-transform: uppercase; letter-spacing: 0.1em; }
 
-/* ─── Loading splash (before React mounts) ─── */
+/* ─── Loading splash (branded; paints before React mounts AND on navigation) ───
+   Single centred, self-looping Datum brand mark on a full-bleed navy backdrop.
+   The navy (#080E3D) is the mean of the corners baked into datum-loop.webp
+   (#0C143E↔#04083C), so the backdrop equals the asset's own background and there
+   is no visible rectangle seam around the mark. A deliberate branded moment,
+   identical in light and dark. Ported from Datum Labs SDK (2813f76). */
 .boot-splash {
-  display: grid;
-  grid-template-columns: 220px 1fr;
-  grid-template-rows: 44px 1fr 28px;
-  height: 100vh;
+  position: fixed; inset: 0; z-index: 9999;
+  display: grid; place-items: center;
+  background: #080E3D;
+  animation: bootFade 0.18s ease-out;
 }
-.boot-splash .bs-top {
-  grid-column: 1 / -1;
-  background: var(--surface); border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; padding: 0 16px; gap: 14px;
+.boot-splash-mark {
+  width: min(440px, 64vw); height: auto; display: block;
 }
-.boot-splash .bs-brand {
-  width: 22px; height: 22px; border-radius: 4px;
-  background: var(--orange);
+@keyframes bootFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
-.boot-splash .bs-brand-name {
-  font-family: var(--font-mono); font-weight: 600; font-size: 13px; color: var(--fg);
-}
-.boot-splash .bs-side {
-  background: var(--surface-2); border-right: 1px solid var(--border);
-  padding: 16px 14px;
-}
-.boot-splash .bs-line {
-  height: 10px; border-radius: 3px; background: var(--bg-2);
-  margin-bottom: 10px;
-  animation: bsShimmer 1.2s linear infinite;
-}
-.boot-splash .bs-line.w60 { width: 60%; }
-.boot-splash .bs-line.w80 { width: 80%; }
-.boot-splash .bs-line.w40 { width: 40%; }
-.boot-splash .bs-main { padding: 24px; }
-.boot-splash .bs-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 16px; }
-.boot-splash .bs-card {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--panel-radius); height: 96px;
-  position: relative; overflow: hidden;
-}
-.boot-splash .bs-card::after {
-  content: ""; position: absolute; inset: 0;
-  background: linear-gradient(90deg, transparent 0%, var(--hover) 50%, transparent 100%);
-  animation: bsShimmer 1.4s linear infinite;
-}
-.boot-splash .bs-big {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--panel-radius); height: 320px;
-  position: relative; overflow: hidden;
-}
-.boot-splash .bs-big::after {
-  content: ""; position: absolute; inset: 0;
-  background: linear-gradient(90deg, transparent 0%, var(--hover) 50%, transparent 100%);
-  animation: bsShimmer 1.6s linear infinite;
-}
-.boot-splash .bs-status {
-  grid-column: 1 / -1;
-  background: var(--surface); border-top: 1px solid var(--border);
-  display: flex; align-items: center; padding: 0 16px;
-  font-family: var(--font-mono); font-size: 10px; color: var(--fg-muted);
-}
-@keyframes bsShimmer {
-  0% { opacity: 0.6; transform: translateX(-100%); }
-  100% { opacity: 0.6; transform: translateX(100%); }
+@media (prefers-reduced-motion: reduce) {
+  .boot-splash { animation: none; }
 }
 
 /* ─── Skeleton (placeholder while data loads) ─── */
@@ -674,6 +633,18 @@ body[data-aesthetic="evolved"] .panel-header { background: transparent; }
   border-bottom-right-radius: var(--panel-radius);
 }
 .panel-body.flush { padding: 0; }
+
+/* ─── Panel caption ─── one-line "what this is and why it matters" under a panel
+   header. Lets a terminal spell out its thesis at the point of each chart/table.
+   Ported from Datum Labs SDK (cc42f5e). */
+.panel-caption {
+  padding: 9px 16px;
+  font-family: var(--font-sans);
+  font-size: 11.5px; line-height: 1.5;
+  color: var(--fg-muted);
+  border-bottom: 1px solid var(--border);
+}
+.panel-caption b { color: var(--fg); font-weight: 600; }
 
 /* ─── Metric ─── */
 .metric {
@@ -1346,3 +1317,64 @@ tr.row-clickable:hover {
 tr.row-clickable:hover td:last-child {
   color: var(--orange) !important;
 }
+
+/* ═══ Aesthetic: Institutional — clean SaaS (Inter, sentence case, roomy, neutral) ═══
+   The "Artemis look": one neutral sans everywhere (incl. numbers), no uppercase /
+   letter-spacing, more whitespace, colour reserved for data — not chrome.
+   Ported from Datum Labs SDK (aa17906). Selectable via the topbar look-switcher;
+   the Inter face is loaded in the @import at the top of this file. */
+body[data-aesthetic="institutional"] {
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --panel-radius: 12px;
+  --panel-pad: 22px;
+  --grid-gap: 18px;
+}
+/* numbers + labels in clean sans (with tabular figures), never mono */
+body[data-aesthetic="institutional"] .mono,
+body[data-aesthetic="institutional"] .metric-value,
+body[data-aesthetic="institutional"] .metric-label,
+body[data-aesthetic="institutional"] .metric-footer,
+body[data-aesthetic="institutional"] .panel-title,
+body[data-aesthetic="institutional"] .panel-badge,
+body[data-aesthetic="institutional"] .sidebar-section-label,
+body[data-aesthetic="institutional"] .nav-item,
+body[data-aesthetic="institutional"] .nav-count,
+body[data-aesthetic="institutional"] .page-title,
+body[data-aesthetic="institutional"] .page-subtitle,
+body[data-aesthetic="institutional"] .risk-pill,
+body[data-aesthetic="institutional"] .datatable,
+body[data-aesthetic="institutional"] .datatable thead th,
+body[data-aesthetic="institutional"] .asset-sub,
+body[data-aesthetic="institutional"] .statusbar,
+body[data-aesthetic="institutional"] .topbar-brand-name,
+body[data-aesthetic="institutional"] .topbar-terminal,
+body[data-aesthetic="institutional"] .panel-body svg text {
+  font-family: var(--font-sans) !important;
+  font-variant-numeric: tabular-nums;
+}
+/* sentence case, normal spacing (kill the terminal UPPERCASE + tracking) */
+body[data-aesthetic="institutional"] .metric-label,
+body[data-aesthetic="institutional"] .panel-title,
+body[data-aesthetic="institutional"] .panel-badge,
+body[data-aesthetic="institutional"] .sidebar-section-label,
+body[data-aesthetic="institutional"] .datatable thead th,
+body[data-aesthetic="institutional"] .asset-sub,
+body[data-aesthetic="institutional"] .caps,
+body[data-aesthetic="institutional"] .risk-pill {
+  text-transform: none;
+  letter-spacing: 0;
+}
+/* SaaS weights / sizes / tone */
+body[data-aesthetic="institutional"] .metric-value { font-weight: 600; letter-spacing: -0.02em; }
+body[data-aesthetic="institutional"] .metric-label { color: var(--fg-muted); font-size: 12px; font-weight: 500; }
+body[data-aesthetic="institutional"] .page-title { font-weight: 600; letter-spacing: -0.02em; }
+body[data-aesthetic="institutional"] .panel-title { font-size: 13px; font-weight: 600; color: var(--fg); }
+body[data-aesthetic="institutional"] .panel-badge { font-size: 11px; color: var(--fg-dim); }
+body[data-aesthetic="institutional"] .sidebar-section-label { font-size: 11px; font-weight: 600; color: var(--fg-dim); }
+body[data-aesthetic="institutional"] .panel-header { background: transparent; }
+body[data-aesthetic="institutional"] .panel { box-shadow: var(--shadow-sm); }
+/* neutral chrome: drop the ❯ terminal prompts + the orange bullet glyphs */
+body[data-aesthetic="institutional"] .topbar-terminal .prompt,
+body[data-aesthetic="institutional"] .panel-title .bullet { display: none; }
+body[data-aesthetic="institutional"] .nav-item.active { background: var(--hover); color: var(--fg); }
+body[data-aesthetic="institutional"] .nav-item.active::before { background: var(--fg); }

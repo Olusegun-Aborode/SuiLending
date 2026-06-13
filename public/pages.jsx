@@ -44,6 +44,11 @@ const ALL_PROTO_IDS = new Proxy([], {
 
 function PageShell({ pageId, title, terminal, headerRight, children }) {
   const [theme, setTheme] = useStateP(document.body.getAttribute('data-theme') || 'light');
+  // Aesthetic preset (look-and-feel). 'evolved' = the terminal look (default);
+  // 'institutional' = clean SaaS (Inter, sentence case, neutral chrome), ported
+  // from the SDK. Persisted to localStorage; the per-page pre-paint script in
+  // each HTML <head> re-applies it before React mounts so there's no flash.
+  const [aesthetic, setAesthetic] = useStateP(document.body.getAttribute('data-aesthetic') || 'evolved');
   const [cmdk, setCmdk] = useStateP(false);
   const [, forceRerender] = useStateP(0);
 
@@ -51,6 +56,11 @@ function PageShell({ pageId, title, terminal, headerRight, children }) {
     document.body.setAttribute('data-theme', theme);
     try { localStorage.setItem('theme', theme); } catch(e) {}
   }, [theme]);
+
+  useEffectP(() => {
+    document.body.setAttribute('data-aesthetic', aesthetic);
+    try { localStorage.setItem('aesthetic', aesthetic); } catch(e) {}
+  }, [aesthetic]);
 
   useEffectP(() => {
     const h = (e) => {
@@ -116,7 +126,7 @@ function PageShell({ pageId, title, terminal, headerRight, children }) {
 
   return (
     <>
-      <Topbar title={terminal} onOpenCmdk={() => setCmdk(true)} theme={theme} setTheme={setTheme} />
+      <Topbar title={terminal} onOpenCmdk={() => setCmdk(true)} theme={theme} setTheme={setTheme} aesthetic={aesthetic} setAesthetic={setAesthetic} />
       <Sidebar current={pageId} />
       <main className="main">
         <div className="page-header">
@@ -1824,6 +1834,9 @@ function PageCollateral() {
             </span>
             <ConcentrationChip hhi={supplyHhi} />
           </div>
+          <div className="panel-caption">
+            <b>How crowded the sector's collateral is on a few assets.</b> A crash in one concentrated asset is borne by the lenders backing it — diffuse collateral spreads that risk.
+          </div>
           <div className="panel-body">
             {/* Re-labelled MiniStats — plain English. Old labels were
                 "Top 1 / Top 3 / Top 5 / Unique" which is jargon. */}
@@ -1865,6 +1878,9 @@ function PageCollateral() {
             <span style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
               {pythPrimaryCount}/{oracleConfig.length} on Pyth primary
             </span>
+          </div>
+          <div className="panel-caption">
+            <b>Pyth is primary at all five protocols.</b> The systemic risk is undocumented failover, not single-oracle dependence — secondaries exist but their weights and staleness thresholds aren't public.
           </div>
           <div className="panel-body">
             <OracleConfigView

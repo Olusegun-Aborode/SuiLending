@@ -707,20 +707,9 @@ Object.assign(window, {
 });
 
 function showNavSplash() {
-  const html = `<div class="boot-splash" style="position:fixed;inset:0;z-index:9999;background:var(--bg)">
-    <div class="bs-top"><span class="bs-brand"></span><span class="bs-brand-name">datum labs</span></div>
-    <aside class="bs-side">
-      <div class="bs-line w40" style="margin-top:6px"></div>
-      <div class="bs-line w80"></div><div class="bs-line w60"></div>
-      <div class="bs-line w80"></div><div class="bs-line w60"></div>
-    </aside>
-    <main class="bs-main">
-      <div class="bs-line w40" style="width:220px;height:24px"></div>
-      <div class="bs-row"><div class="bs-card"></div><div class="bs-card"></div><div class="bs-card"></div><div class="bs-card"></div></div>
-      <div class="bs-big"></div>
-    </main>
-    <div class="bs-status">loading…</div>
-  </div>`;
+  // Branded loading mark (ported from the SDK). The .boot-splash CSS supplies
+  // the full-bleed navy backdrop + fixed positioning, so no inline styles here.
+  const html = `<div class="boot-splash"><img class="boot-splash-mark" src="assets/brand/datum-loop.webp" alt="Datum Labs" /></div>`;
   const el = document.createElement('div');
   el.innerHTML = html;
   document.body.appendChild(el.firstElementChild);
