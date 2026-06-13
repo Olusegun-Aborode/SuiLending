@@ -671,8 +671,9 @@ export async function GET() {
         sym: String(r.sym),
         supplyUsd: Number(r.collateralUsd) || 0,
         borrowUsd: Number(r.debtUsd) || 0,
-        // Vault HF analog: collateralUsd × (1/minCR%) / debtUsd
-        healthFactor: r.debtUsd > 0 && r.minCR > 0
+        // Vault HF analog: collateralUsd × (1/minCR%) / debtUsd.
+        // minCR is null for non-CDP surfaces — HF is undefined there.
+        healthFactor: (r.debtUsd > 0 && r.minCR != null && r.minCR > 0)
           ? (r.collateralUsd * (100 / r.minCR)) / r.debtUsd
           : null,
       })),
@@ -821,15 +822,42 @@ function toPoolRow(r: SnapshotRow) {
 }
 
 function toVaultRow(r: SnapshotRow) {
+  // Real minimum collateral ratio, recovered from the stored ltv.
+  //
+  // The Bucket adapter sets ltv = 100 / minCollateralRatio. For a real CDP
+  // vault (e.g. SUI at minCR 110%) the SDK returns the ratio 1.1, so the
+  // stored ltv is 100/1.1 = 90.909, and minCR% = 10000 / ltv = 110.
+  //
+  // The catch: the Bucket SDK returns minCollateralRatio in INCONSISTENT
+  // units across vault families. PSM rows come through with ltv = 1 (1:1
+  // peg, not a risk-bearing CDP) and V1 legacy rows with ltv = 0. Inverting
+  // those blindly gives nonsense (10000%, ∞). So we only accept a derived
+  // minCR when it lands in a plausible CDP band [100%, 1000%]; otherwise
+  // null and the frontend renders "—". This recovers the one figure we can
+  // stand behind (SUI 110%) without fabricating minCRs for PSM/legacy rows.
+  //
+  // Previously this was hardcoded to 110 for EVERY vault, which was wrong
+  // for PSMs (peg, ~100%) and V1 (unknown). The proper long-term fix is to
+  // normalise minCollateralRatio units inside the Bucket adapter and persist
+  // a clean per-vault field; until then this is the honest interim.
+  const minCRCandidate = r.ltv > 0 ? Math.round(10000 / r.ltv) : null;
+  const minCR = (minCRCandidate != null && minCRCandidate >= 100 && minCRCandidate <= 1000)
+    ? minCRCandidate
+    : null;
   return {
     sym: r.symbol,
     protocol: r.protocol,
     collateralUsd: r.totalSupplyUsd / 1e6,
     debtUsd: r.totalBorrowsUsd / 1e6,
     interestRate: r.borrowApy,
-    redemptionFee: 0.5,
-    psmFee: 0.1,
-    minCR: 110,
+    // redemptionFee / psmFee are NOT indexed — the adapter doesn't read them
+    // and they aren't on PoolSnapshot. Return null so the frontend renders
+    // "—" rather than the fake 0.5% / 0.1% placeholders that used to ship.
+    // Wire these up properly when the Bucket adapter persists per-vault fee
+    // params (needs a schema column).
+    redemptionFee: null as number | null,
+    psmFee: null as number | null,
+    minCR,
     risk: riskTier(r.utilization, r.borrowApy),
     spark: Array.from({ length: 30 }, () => r.totalSupplyUsd / 1e6),
     // Oracle config so the vault-detail page can render primary + secondary

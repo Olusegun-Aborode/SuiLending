@@ -1411,8 +1411,8 @@ function PageProtocol() {
                     <td style={{ padding: 8 }}>{fmtUSD(m.collateralUsd * 1e6, 1)}</td>
                     <td style={{ padding: 8 }}>{fmtUSD(m.debtUsd * 1e6, 1)}</td>
                     <td style={{ padding: 8 }}>{m.interestRate.toFixed(2)}%</td>
-                    <td style={{ padding: 8 }}>{m.minCR}%</td>
-                    <td style={{ padding: 8 }}>{m.redemptionFee.toFixed(2)}%</td>
+                    <td style={{ padding: 8 }}>{m.minCR != null ? `${m.minCR}%` : '—'}</td>
+                    <td style={{ padding: 8 }}>{m.redemptionFee != null ? `${m.redemptionFee.toFixed(2)}%` : '—'}</td>
                     <td style={{ padding: 8 }}><RiskChip risk={m.risk} /></td>
                     <td style={{ padding: 8, color: 'var(--fg-muted)' }}>›</td>
                   </tr>
@@ -1555,9 +1555,9 @@ function PageRates() {
                             <td style={{ padding: 8 }}>{fmtUSD(m.collateralUsd * 1e6, 1)}</td>
                             <td style={{ padding: 8 }}>{fmtUSD(m.debtUsd * 1e6, 1)}</td>
                             <td style={{ padding: 8, color: 'var(--red)' }}>{m.interestRate.toFixed(2)}%</td>
-                            <td style={{ padding: 8 }}>{m.redemptionFee.toFixed(2)}%</td>
-                            <td style={{ padding: 8 }}>{m.psmFee.toFixed(2)}%</td>
-                            <td style={{ padding: 8 }}>{m.minCR}%</td>
+                            <td style={{ padding: 8 }}>{m.redemptionFee != null ? `${m.redemptionFee.toFixed(2)}%` : '—'}</td>
+                            <td style={{ padding: 8 }}>{m.psmFee != null ? `${m.psmFee.toFixed(2)}%` : '—'}</td>
+                            <td style={{ padding: 8 }}>{m.minCR != null ? `${m.minCR}%` : '—'}</td>
                             <td style={{ padding: 8, color: 'var(--fg-muted)' }}>›</td>
                           </tr>
                         ))}
@@ -2666,7 +2666,7 @@ function PageMarketDetail() {
             ? `${(market.collateralUsd / market.debtUsd * 100).toFixed(0)}%`
             : '—',
           change: 0,
-          subLabel: market.debtUsd > 0 ? `min ${market.minCR}%` : 'no debt outstanding' },
+          subLabel: market.debtUsd > 0 ? (market.minCR != null ? `min ${market.minCR}%` : 'CDP vault') : 'no debt outstanding' },
         { id: 'rate',label: 'Interest Rate',     value: `${market.interestRate.toFixed(2)}%`, change: 0 },
       ]} />
 
@@ -2677,9 +2677,9 @@ function PageMarketDetail() {
             <ParamRow k="Collateral Asset" v={marketSym} />
             <ParamRow k="Stablecoin Issued" v="USDB" />
             <ParamRow k="Interest Rate"     v={`${market.interestRate.toFixed(2)}%`} c="var(--red)" />
-            <ParamRow k="Redemption Fee"    v={`${market.redemptionFee.toFixed(2)}%`} />
-            <ParamRow k="PSM Fee"           v={`${market.psmFee.toFixed(2)}%`} />
-            <ParamRow k="Min Collateral Ratio" v={`${market.minCR}%`} />
+            <ParamRow k="Redemption Fee"    v={market.redemptionFee != null ? `${market.redemptionFee.toFixed(2)}%` : '— (not indexed)'} c={market.redemptionFee == null ? 'var(--fg-muted)' : undefined} />
+            <ParamRow k="PSM Fee"           v={market.psmFee != null ? `${market.psmFee.toFixed(2)}%` : '— (not indexed)'} c={market.psmFee == null ? 'var(--fg-muted)' : undefined} />
+            <ParamRow k="Min Collateral Ratio" v={market.minCR != null ? `${market.minCR}%` : '—'} />
             <ParamRow k="Risk Tier"         v={<RiskChip risk={market.risk} />} />
           </div>
         </div>
@@ -2698,24 +2698,27 @@ function PageMarketDetail() {
               //     fabricating, per §1.2 / §8.C ("no un-sourced figure ships").
               const surplusUsdM = market.collateralUsd - market.debtUsd;
               const backingRatio = market.debtUsd > 0 ? market.collateralUsd / market.debtUsd * 100 : null;
-              const headroomPP = backingRatio != null ? backingRatio - market.minCR : null;
+              // headroom + colour bands only when we have a real minCR. For
+              // non-CDP surfaces (minCR null) we can't compute headroom.
+              const headroomPP = (backingRatio != null && market.minCR != null) ? backingRatio - market.minCR : null;
               const surplusColor = surplusUsdM < 0 ? 'var(--red)' : surplusUsdM < market.debtUsd * 0.05 ? 'var(--orange)' : 'var(--green)';
-              const ratioColor = backingRatio == null ? 'var(--fg-muted)' :
+              const ratioColor = (backingRatio == null || market.minCR == null) ? 'var(--fg-muted)' :
                                  backingRatio < market.minCR + 5 ? 'var(--red)' :
                                  backingRatio < market.minCR * 1.20 ? 'var(--orange)' :
                                  'var(--green)';
               return (
                 <>
                   <ParamRow k="Backing Ratio (CR)" v={backingRatio != null ? `${backingRatio.toFixed(1)}%` : '—'} c={ratioColor} />
-                  <ParamRow k="Min CR (liquidation)" v={`${market.minCR}%`} />
+                  <ParamRow k="Min CR (liquidation)" v={market.minCR != null ? `${market.minCR}%` : '—'} />
                   <ParamRow k="Headroom over Min CR" v={headroomPP != null ? `${headroomPP.toFixed(1)}pp` : '—'} />
                   <ParamRow k="Surplus / Backing Buffer" v={fmtUSD(surplusUsdM * 1e6, 2)} c={surplusColor} />
                   <ParamRow k="USDB / Collateral (Util)" v={`${(market.debtUsd / Math.max(market.collateralUsd, 1e-9) * 100).toFixed(1)}%`} />
                   {/* Peg / redemption spread per §4 CDP variants. USDB/BUCK
                       market price not yet indexed; render "—" with a not-indexed
-                      tag rather than fake it. Redemption fee IS in vault data. */}
+                      tag rather than fake it. Redemption / PSM fees aren't
+                      indexed either (adapter doesn't persist them yet). */}
                   <ParamRow k="Peg Spread (USDB vs $1)" v="—" c="var(--fg-muted)" />
-                  <ParamRow k="Redemption Fee" v={`${market.redemptionFee.toFixed(2)}%`} />
+                  <ParamRow k="Redemption Fee" v={market.redemptionFee != null ? `${market.redemptionFee.toFixed(2)}%` : '— (not indexed)'} c={market.redemptionFee == null ? 'var(--fg-muted)' : undefined} />
                   <ParamRow k="Spot Price" v={fmtUSD(price, price < 10 ? 4 : 2)} />
                   <ParamRow k="Oracle (primary)" v={market.oracleSource || 'Pyth'} />
                   {(market.oracleSecondaries && market.oracleSecondaries.length > 0) && (
