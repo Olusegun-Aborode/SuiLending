@@ -75,20 +75,50 @@ const PROTOCOL_ARCHETYPE: Record<string, 'pool' | 'cdp'> = {
 // secondaries' failover weights/staleness thresholds are not public". The
 // `primary` is what feeds the per-market "Oracle" parameter row; `secondaries`
 // drives the concentration panel's per-protocol view.
+//
+// VERIFIED-DATE DISCIPLINE: this map is hardcoded metadata (oracle
+// architecture changes at most once or twice a year via governance, and
+// there is no uniform on-chain field across all five protocols to read it
+// from). A hardcode with no review cadence is how the wrong "100% Pyth"
+// claim shipped in the first place. So each entry carries `verifiedAt` (the
+// date a human last checked it against the protocol's own docs) and the map
+// carries a `recheckDays` cadence. The API surfaces both, and a helper flags
+// the config as STALE when any entry is older than the cadence — so a
+// silently-drifted oracle config becomes visible instead of confidently
+// wrong. Update verifiedAt whenever you re-check an entry.
 interface OracleConfig {
   protocol: string;
   primary: string;
   secondaries: string[];
   /** Short note on what is and isn't publicly documented. */
   note: string;
+  /** ISO date a human last verified this against the protocol's own docs. */
+  verifiedAt: string;
 }
+// Recheck cadence: oracle architecture is slow-moving, but a quarterly
+// re-verify is cheap insurance against a silent governance change.
+const ORACLE_RECHECK_DAYS = 90;
 const PROTOCOL_ORACLES: Record<string, OracleConfig> = {
-  navi:      { protocol: 'navi',      primary: 'Pyth', secondaries: ['Supra'],                  note: 'Documented Pyth + Supra dual-source.' },
-  suilend:   { protocol: 'suilend',   primary: 'Pyth', secondaries: ['Switchboard'],            note: 'Pyth with Switchboard referenced in architecture.' },
-  scallop:   { protocol: 'scallop',   primary: 'Pyth', secondaries: ['Switchboard', 'Supra'],   note: 'xOracle aggregation layer over Pyth, Switchboard, Supra.' },
-  alphalend: { protocol: 'alphalend', primary: 'Pyth', secondaries: [],                         note: 'Pyth only — genuinely single-source.' },
-  bucket:    { protocol: 'bucket',    primary: 'Pyth', secondaries: ['Supra'],                  note: 'Pyth primary; Supra lists Bucket among Sui integrations.' },
+  navi:      { protocol: 'navi',      primary: 'Pyth', secondaries: ['Supra'],                  note: 'Documented Pyth + Supra dual-source.',                 verifiedAt: '2026-06-13' },
+  suilend:   { protocol: 'suilend',   primary: 'Pyth', secondaries: ['Switchboard'],            note: 'Pyth with Switchboard referenced in architecture.',   verifiedAt: '2026-06-13' },
+  scallop:   { protocol: 'scallop',   primary: 'Pyth', secondaries: ['Switchboard', 'Supra'],   note: 'xOracle aggregation layer over Pyth, Switchboard, Supra.', verifiedAt: '2026-06-13' },
+  alphalend: { protocol: 'alphalend', primary: 'Pyth', secondaries: [],                         note: 'Pyth only — genuinely single-source.',                verifiedAt: '2026-06-13' },
+  bucket:    { protocol: 'bucket',    primary: 'Pyth', secondaries: ['Supra'],                  note: 'Pyth primary; Supra lists Bucket among Sui integrations.', verifiedAt: '2026-06-13' },
 };
+
+// Oldest verifiedAt across the map, and whether any entry is past the
+// recheck cadence. Surfaced in the API so the panel + an integrity gate can
+// flag a stale oracle config rather than presenting it as freshly true.
+function oracleConfigFreshness(serverTimeMs: number): { oldestVerifiedAt: string; staleProtocols: string[]; recheckDays: number } {
+  const staleProtocols: string[] = [];
+  let oldest = '9999-12-31';
+  for (const cfg of Object.values(PROTOCOL_ORACLES)) {
+    if (cfg.verifiedAt < oldest) oldest = cfg.verifiedAt;
+    const ageDays = (serverTimeMs - new Date(cfg.verifiedAt + 'T00:00:00Z').getTime()) / 86400000;
+    if (ageDays > ORACLE_RECHECK_DAYS) staleProtocols.push(cfg.protocol);
+  }
+  return { oldestVerifiedAt: oldest, staleProtocols, recheckDays: ORACLE_RECHECK_DAYS };
+}
 
 interface SnapshotRow {
   protocol: string;
@@ -662,11 +692,17 @@ export async function GET() {
       days,
       asOf,
       integrityGates,
-      // Per-protocol oracle configuration (primary + documented secondaries).
-      // Drives the Oracle-concentration panel honestly: Pyth is primary at
-      // every protocol, 4 of 5 document a secondary feed. Only protocols we
-      // actually report are included.
-      oracleConfig: protocols.map((p) => PROTOCOL_ORACLES[p.id] ?? { protocol: p.id, primary: 'Pyth', secondaries: [], note: 'Unknown oracle configuration.' }),
+      // Per-protocol oracle configuration (primary + documented secondaries +
+      // the date a human last verified each entry). Drives the Oracle panel
+      // honestly: Pyth is primary at every protocol, 4 of 5 document a
+      // secondary feed. Only protocols we actually report are included.
+      oracleConfig: protocols.map((p) => PROTOCOL_ORACLES[p.id] ?? { protocol: p.id, primary: 'Pyth', secondaries: [], note: 'Unknown oracle configuration.', verifiedAt: null }),
+      // Freshness discipline for the hardcoded oracle map. `oldestVerifiedAt`
+      // is the date the panel stamps; `staleProtocols` is non-empty once any
+      // entry is past `recheckDays`, which flips the panel's freshness chip to
+      // a "recheck due" warning. This is the guardrail that stops the map
+      // silently going stale-wrong the way the old "100% Pyth" claim did.
+      oracleConfigMeta: oracleConfigFreshness(new Date(asOf.serverTime).getTime()),
       generatedAt: new Date().toISOString(),
     }, {
       headers: {
@@ -1067,6 +1103,26 @@ function computeIntegrityGates(inputs: IntegrityInputs): IntegrityGate[] {
       detail: violators.length === 0
         ? `${allRows.length} markets within sanity bounds`
         : `${violators.length} outlier(s): ${violators.slice(0, 3).join('; ')}${violators.length > 3 ? '…' : ''}`,
+    });
+  }
+
+  // 9. Oracle-map freshness (§ hardcode-review discipline).
+  //
+  // The per-protocol oracle map is hardcoded metadata, not live-read — there
+  // is no uniform on-chain field for it across all five protocols. A hardcode
+  // with no review cadence is exactly how the wrong "100% Pyth" claim shipped.
+  // This gate makes the map's age visible: 'warn' once any entry is past the
+  // recheck cadence, so "recheck the oracle map" surfaces in the same audit
+  // panel as every other data-integrity check instead of being forgotten.
+  {
+    const fresh = oracleConfigFreshness(new Date(inputs.asOf.serverTime).getTime());
+    gates.push({
+      id: 'oracle_map_freshness',
+      label: `Oracle-map freshness (re-verify within ${fresh.recheckDays}d)`,
+      status: fresh.staleProtocols.length === 0 ? 'pass' : 'warn',
+      detail: fresh.staleProtocols.length === 0
+        ? `Oracle map verified ${fresh.oldestVerifiedAt} (within ${fresh.recheckDays}d window)`
+        : `Recheck due — ${fresh.staleProtocols.length} entr${fresh.staleProtocols.length === 1 ? 'y' : 'ies'} past ${fresh.recheckDays}d: ${fresh.staleProtocols.join(', ')} (oldest ${fresh.oldestVerifiedAt})`,
     });
   }
 

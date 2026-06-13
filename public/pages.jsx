@@ -301,10 +301,22 @@ function ShareBars({ items, formatter = (v) => v.toFixed(0) }) {
 // real risk: the failover weights and staleness thresholds are not public,
 // so it is unclear whether the secondaries contribute to price formation in
 // normal operation or only on Pyth fallback.
-function OracleConfigView({ config, colorMap, protocolName, pythPrimaryCount, withSecondaryCount, providerCount }) {
+function OracleConfigView({ config, colorMap, protocolName, pythPrimaryCount, withSecondaryCount, providerCount, meta }) {
   if (!config || config.length === 0) {
     return <div style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>No oracle data indexed.</div>;
   }
+  // Freshness discipline for the hardcoded oracle map. `meta` carries the
+  // oldest verified date + any entries past the recheck cadence; we stamp the
+  // date and flip an amber "recheck due" chip when stale, so the map can't go
+  // silently stale-wrong the way the old "100% Pyth" claim did.
+  const fmtVerified = (iso) => {
+    if (!iso) return null;
+    const d = new Date(iso + 'T00:00:00Z');
+    if (isNaN(d)) return iso;
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  };
+  const stale = meta && Array.isArray(meta.staleProtocols) && meta.staleProtocols.length > 0;
+  const verifiedLabel = fmtVerified(meta?.oldestVerifiedAt);
   const chip = (name, primary) => {
     const color = colorMap[name] ?? 'var(--fg-muted)';
     return (
@@ -343,6 +355,12 @@ function OracleConfigView({ config, colorMap, protocolName, pythPrimaryCount, wi
                 <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--orange)', letterSpacing: 0.3 }}>no secondary documented</span>
               )}
             </div>
+            {o.verifiedAt && (
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--fg-muted)', paddingTop: 4, whiteSpace: 'nowrap' }}
+                title={`Oracle config last verified against ${protocolName(o.protocol)}'s own docs on ${fmtVerified(o.verifiedAt)}`}>
+                ✓ {fmtVerified(o.verifiedAt)}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -355,6 +373,28 @@ function OracleConfigView({ config, colorMap, protocolName, pythPrimaryCount, wi
         {' '}in normal operation or only when Pyth fails. A bad Pyth quote would not behave identically across
         {' '}the five, but it would still drive most of the sector's pricing.
       </div>
+
+      {/* Hardcode-provenance footer. This map is hand-maintained metadata, not
+          a live read — so it carries a last-verified date and a recheck cadence.
+          Amber when any entry is past the cadence: that is the guardrail that
+          stops it going silently stale-wrong. */}
+      {meta && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontFamily: 'var(--font-mono)', fontSize: 10, color: stale ? 'var(--accent-orange)' : 'var(--fg-muted)' }}>
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 8px', borderRadius: 10,
+            background: stale ? 'var(--accent-orange-soft)' : 'var(--bg-soft, rgba(127,127,127,0.08))',
+            border: `1px solid ${stale ? 'var(--orange)' : 'var(--border-soft)'}`,
+          }}>
+            <span style={{ width: 6, height: 6, borderRadius: 3, background: stale ? 'var(--orange)' : 'var(--green, #2ecc71)' }} />
+            {stale ? 'Recheck due' : 'Verified'}
+          </span>
+          <span>
+            {stale
+              ? `Oracle map past its ${meta.recheckDays}d recheck: ${meta.staleProtocols.map(protocolName).join(', ')}. Re-verify against each protocol's docs.`
+              : `Hand-verified metadata, oldest entry ${verifiedLabel}. Re-checked every ${meta.recheckDays} days against each protocol's docs.`}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -1738,6 +1778,7 @@ function PageCollateral() {
   // every protocol; 4 of 5 document a secondary. The honest systemic point
   // is undocumented failover logic, not single-oracle dependence.
   const oracleConfig = D.oracleConfig || [];
+  const oracleConfigMeta = D.oracleConfigMeta || null;
   const protocolName = (id) => (D.protocols.find(p => p.id === id)?.name) || id;
   const pythPrimaryCount = oracleConfig.filter(o => o.primary === 'Pyth').length;
   const withSecondaryCount = oracleConfig.filter(o => (o.secondaries || []).length > 0).length;
@@ -1833,6 +1874,7 @@ function PageCollateral() {
               pythPrimaryCount={pythPrimaryCount}
               withSecondaryCount={withSecondaryCount}
               providerCount={allProviders.size}
+              meta={oracleConfigMeta}
             />
           </div>
         </div>
