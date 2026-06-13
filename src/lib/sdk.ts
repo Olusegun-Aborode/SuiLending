@@ -70,6 +70,9 @@ interface NaviApiPool {
   };
   /** Treasury cut RAY-scaled — used as a fallback proxy for reserveFactor. */
   treasuryFactor?: string;
+  /** NAVI flags wound-down (e.g. Wormhole-wrapped) markets. Used to break
+   *  same-symbol collisions in favour of the active market. */
+  isDeprecated?: boolean;
   supplyIncentiveApyInfo: {
     boostedApr: number;
   };
@@ -148,6 +151,33 @@ function rateToApyPercent(rawRate: string): number {
   return parseFloat(apy.toFixed(4));
 }
 
+/**
+ * Collapse markets that share a token symbol down to one canonical market.
+ *
+ * NAVI lists multiple markets per asset (active LayerZero / Sui-bridge / native
+ * plus wound-down Wormhole copies). Distinct symbols (e.g. "WBTC" vs "wBTC")
+ * are fine and kept separate; the problem is genuine same-symbol duplicates,
+ * where a deprecated market and an active one both report as "WBTC". Since the
+ * rest of the stack identifies markets by (protocol, symbol), we keep only the
+ * canonical one: prefer the non-deprecated market, then the larger book
+ * (raw totalSupply). Deterministic regardless of API ordering.
+ */
+function dedupeBySymbol(pools: NaviApiPool[]): NaviApiPool[] {
+  const best = new Map<string, NaviApiPool>();
+  for (const p of pools) {
+    const sym = p.token?.symbol;
+    if (!sym) continue;
+    const cur = best.get(sym);
+    if (!cur) { best.set(sym, p); continue; }
+    const activeGain = Number(!p.isDeprecated) - Number(!cur.isDeprecated);
+    const better = activeGain !== 0
+      ? activeGain > 0
+      : Number(p.totalSupply ?? 0) > Number(cur.totalSupply ?? 0);
+    if (better) best.set(sym, p);
+  }
+  return [...best.values()];
+}
+
 // ─── Main fetch functions ───────────────────────────────────────────────────
 
 /**
@@ -172,7 +202,15 @@ export async function fetchAllPools(): Promise<NaviPoolData[]> {
       return [];
     }
 
-    return json.data.map((pool) => {
+    // NAVI sometimes lists two markets under the same token symbol — e.g. an
+    // active LayerZero "WBTC" (id 32) and a wound-down Wormhole "WBTC" (id 8,
+    // isDeprecated). Everything downstream keys markets by (protocol, symbol),
+    // so the duplicates collide in RateModelParams and the deprecated market's
+    // params (LT 0.45, reserveFactor 0.98) clobber the active market's
+    // (LT 0.70, reserveFactor 0.50) — yielding an impossible row where the
+    // liquidation threshold sits below the LTV. Keep one market per symbol:
+    // prefer the non-deprecated one, then the larger book.
+    return dedupeBySymbol(json.data).map((pool) => {
       const symbol = pool.token.symbol;
       const price = num(pool.oracle?.price);
       const decimals = num(pool.token.decimals);
