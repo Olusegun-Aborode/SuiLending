@@ -290,73 +290,70 @@ function ShareBars({ items, formatter = (v) => v.toFixed(0) }) {
   );
 }
 
-// Oracle concentration view. Switches between two layouts depending on
-// what the data actually says:
+// Oracle configuration view. CORRECTION 2026-06: replaces the old
+// "OracleConcentrationView" which rendered a false "100% Pyth / single point
+// of failure" because the backend hardcoded every pool's oracle to Pyth.
 //
-//   • Multiple providers (≥2) → donut + legend, same as ConcentrationDonut.
-//     This is the "diverse oracle set" case which our adapters will
-//     eventually surface (Switchboard, Supra), so the panel already knows
-//     how to render it cleanly.
-//
-//   • Single provider (the current Sui mainnet state — every pool is on
-//     Pyth) → a donut at 100% is just a ring with no information. Show a
-//     hero stat instead: big number (% coverage), the provider name as a
-//     chip, a horizontal coverage bar (100% of pools), and the SPOF
-//     callout. Reads as a deliberate risk surface, not a placeholder.
-//
-//   • Zero providers (no oracle data indexed) → graceful "no data" text.
-function OracleConcentrationView({ rows, colorMap }) {
-  if (!rows || rows.length === 0) {
+// Reality: Pyth is the primary feed at every protocol, but most run a
+// documented secondary (NAVI + Supra, Suilend + Switchboard, Scallop's
+// xOracle over Pyth/Switchboard/Supra). Only AlphaLend is genuinely
+// single-source. This view shows the per-protocol oracle SET and frames the
+// real risk: the failover weights and staleness thresholds are not public,
+// so it is unclear whether the secondaries contribute to price formation in
+// normal operation or only on Pyth fallback.
+function OracleConfigView({ config, colorMap, protocolName, pythPrimaryCount, withSecondaryCount, providerCount }) {
+  if (!config || config.length === 0) {
     return <div style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>No oracle data indexed.</div>;
   }
-
-  if (rows.length >= 2) {
+  const chip = (name, primary) => {
+    const color = colorMap[name] ?? 'var(--fg-muted)';
     return (
-      <ConcentrationDonut
-        items={rows.map(r => ({ name: r.name, value: r.count, color: colorMap[r.name] ?? 'var(--fg-muted)' }))}
-        formatter={(v) => `${v} ${v === 1 ? 'pool' : 'pools'}`}
-      />
+      <span key={name} style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+        padding: '2px 9px', borderRadius: 12, marginRight: 6, marginBottom: 4,
+        background: `${color}1f`, fontFamily: 'var(--font-mono)', fontSize: 11,
+        border: primary ? `1px solid ${color}` : '1px solid transparent',
+      }}>
+        <span style={{ width: 7, height: 7, borderRadius: 4, background: color }} />
+        <span style={{ color: 'var(--fg)', fontWeight: primary ? 600 : 400 }}>{name}</span>
+        {primary && <span style={{ fontSize: 9, color: 'var(--fg-muted)', letterSpacing: 0.4 }}>PRIMARY</span>}
+      </span>
     );
-  }
-
-  // Single-provider hero layout.
-  const only = rows[0];
-  const color = colorMap[only.name] ?? 'var(--fg-muted)';
+  };
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 18, marginBottom: 18 }}>
-        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 52, fontWeight: 600, color: 'var(--red)', lineHeight: 1 }}>
-          100<span style={{ fontSize: 28 }}>%</span>
-        </div>
-        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
-          <div>of indexed pools price via</div>
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: 4, padding: '4px 12px', borderRadius: 14, background: `${color}22`, color }}>
-            <span style={{ width: 8, height: 8, borderRadius: 4, background: color }} />
-            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)' }}>{only.name}</span>
-          </div>
-          <div style={{ marginTop: 4 }}>{only.count} of {only.count} pools</div>
-        </div>
+      {/* Headline strip — the honest summary, no false SPOF claim. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
+        <MiniStat label="Pyth primary" value={`${pythPrimaryCount}/${config.length}`} sub="every protocol" />
+        <MiniStat label="Has a secondary" value={`${withSecondaryCount}/${config.length}`} sub="documented feed" />
+        <MiniStat label="Distinct providers" value={String(providerCount)} sub="across the sector" />
       </div>
-      {/* Coverage bar — visually shows "1 provider owns everything". When
-          adapters add a second oracle the bar splits and the diversity
-          becomes visible at a glance. */}
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--fg-muted)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-          <span>Provider coverage</span>
-          <span>1 of 1 providers</span>
-        </div>
-        <div style={{ height: 14, background: 'var(--bg-soft)', borderRadius: 7, overflow: 'hidden', display: 'flex' }}>
-          <div style={{ width: '100%', height: '100%', background: color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', fontSize: 10, color: 'white', fontWeight: 600 }}>
-            {only.name}
+
+      {/* Per-protocol oracle sets */}
+      <div style={{ marginBottom: 14 }}>
+        {config.map(o => (
+          <div key={o.protocol} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '8px 0', borderBottom: '1px solid var(--border-soft)' }}>
+            <div style={{ minWidth: 92, fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600, color: 'var(--fg)', paddingTop: 3 }}>
+              {protocolName(o.protocol)}
+            </div>
+            <div style={{ flex: 1 }}>
+              {chip(o.primary, true)}
+              {(o.secondaries || []).map(s => chip(s, false))}
+              {(o.secondaries || []).length === 0 && (
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--orange)', letterSpacing: 0.3 }}>no secondary documented</span>
+              )}
+            </div>
           </div>
-        </div>
+        ))}
       </div>
-      {/* SPOF callout */}
-      <div style={{ padding: '10px 12px', background: 'var(--accent-red-soft)', borderLeft: '3px solid var(--red)', borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--accent-red)', lineHeight: 1.5 }}>
-        <div style={{ fontWeight: 600, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.4 }}>⚠ Single point of failure</div>
-        Every Sui lending market currently prices via {only.name}. If this feed stalls or quotes a bad price,
-        {' '}every protocol on this dashboard mis-prices at the same moment. A healthy lending sector typically
-        {' '}runs 2–3 independent oracles with cross-checks.
+
+      {/* Honest risk callout — undocumented failover, not single-oracle. */}
+      <div style={{ padding: '10px 12px', background: 'var(--accent-orange-soft)', borderLeft: '3px solid var(--orange)', borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--accent-orange)', lineHeight: 1.5 }}>
+        <div style={{ fontWeight: 600, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.4 }}>⚠ Undocumented failover</div>
+        Pyth is primary at every protocol. Most carry a secondary, but the failover weights and staleness
+        {' '}thresholds are not public, so it is unclear whether the secondaries contribute to price formation
+        {' '}in normal operation or only when Pyth fails. A bad Pyth quote would not behave identically across
+        {' '}the five, but it would still drive most of the sector's pricing.
       </div>
     </div>
   );
@@ -1800,16 +1797,19 @@ function PageCollateral() {
   });
   const stableBorrowShare = totalBorrow > 0 ? (stableBorrow / totalBorrow * 100) : 0;
 
-  // Oracle concentration — % of priced pools per oracle source. With every
-  // protocol currently on Pyth, this comes out near 100%/Pyth, but the
-  // metric is computed honestly so it shifts when adapters diversify.
-  const oracleCount = {};
-  D.pools.forEach(p => { const o = p.oracleSource || 'unknown'; oracleCount[o] = (oracleCount[o] || 0) + 1; });
-  const oracleTotal = Object.values(oracleCount).reduce((s, n) => s + n, 0);
-  const oracleRows = Object.entries(oracleCount)
-    .map(([name, n]) => ({ name, share: oracleTotal > 0 ? n / oracleTotal * 100 : 0, count: n }))
-    .sort((a, b) => b.share - a.share);
-  const oracleHhi = oracleRows.reduce((s, r) => s + r.share * r.share, 0);
+  // Oracle configuration per protocol. CORRECTION 2026-06: the previous
+  // version counted "pools per single hardcoded source" and always produced
+  // 100% Pyth, which is false. The backend now emits `oracleConfig`: each
+  // protocol's primary feed plus documented secondaries. Pyth is primary at
+  // every protocol; 4 of 5 document a secondary. The honest systemic point
+  // is undocumented failover logic, not single-oracle dependence.
+  const oracleConfig = D.oracleConfig || [];
+  const protocolName = (id) => (D.protocols.find(p => p.id === id)?.name) || id;
+  const pythPrimaryCount = oracleConfig.filter(o => o.primary === 'Pyth').length;
+  const withSecondaryCount = oracleConfig.filter(o => (o.secondaries || []).length > 0).length;
+  // Distinct providers across the whole sector (for the headline).
+  const allProviders = new Set();
+  oracleConfig.forEach(o => { allProviders.add(o.primary); (o.secondaries || []).forEach(s => allProviders.add(s)); });
 
   // colour tokens for oracle providers — generic so adding a Switchboard /
   // Supra adapter in future just shows up with the right swatch.
@@ -1876,23 +1876,29 @@ function PageCollateral() {
         <div className="panel col-6">
           <div className="panel-header">
             <span className="panel-title">
-              <span className="bullet">●</span> Oracle concentration
+              <span className="bullet">●</span> Oracle configuration
               <InfoTip>
-                Which price oracles back the sector's collateral. A single
-                {' '}oracle dominating means if it stalls or quotes a bad price,
-                {' '}every protocol on that feed mis-prices at the same moment.
-                {' '}HHI uses the same bands as asset concentration.
-                {' '}When the sector has only one provider this panel shows the
-                {' '}concentration as a coverage stat instead of a donut — a
-                {' '}100% donut is just a ring.
+                Which price oracles each protocol uses. Pyth is the primary
+                {' '}feed at every protocol; most document a secondary
+                {' '}(Supra, Switchboard). The risk is not single-oracle
+                {' '}dependence, it is that the failover weights and staleness
+                {' '}thresholds for those secondaries are not publicly
+                {' '}documented, so it is unclear whether a secondary actually
+                {' '}contributes to price formation or only on Pyth fallback.
               </InfoTip>
             </span>
-            <ConcentrationChip hhi={oracleHhi} />
+            <span style={{ fontSize: 11, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
+              {pythPrimaryCount}/{oracleConfig.length} on Pyth primary
+            </span>
           </div>
           <div className="panel-body">
-            <OracleConcentrationView
-              rows={oracleRows}
+            <OracleConfigView
+              config={oracleConfig}
               colorMap={ORACLE_COLOR}
+              protocolName={protocolName}
+              pythPrimaryCount={pythPrimaryCount}
+              withSecondaryCount={withSecondaryCount}
+              providerCount={allProviders.size}
             />
           </div>
         </div>
@@ -2535,7 +2541,10 @@ function PageMarketDetail() {
               <ParamRow k="Asset" v={marketSym} />
               <ParamRow k="Protocol" v={proto.name} />
               <ParamRow k="Risk Tier" v={<RiskChip risk={market.risk} />} />
-              <ParamRow k="Oracle" v={market.oracleSource} />
+              <ParamRow k="Oracle (primary)" v={market.oracleSource || 'Pyth'} />
+              {(market.oracleSecondaries && market.oracleSecondaries.length > 0) && (
+                <ParamRow k="Oracle (secondary)" v={market.oracleSecondaries.join(', ')} />
+              )}
               {/* Distinct-address counts — null means we don't index per-pool
                   addresses for this protocol (currently only NAVI). Render "—"
                   to avoid claiming 0 users. */}
@@ -2708,7 +2717,10 @@ function PageMarketDetail() {
                   <ParamRow k="Peg Spread (USDB vs $1)" v="—" c="var(--fg-muted)" />
                   <ParamRow k="Redemption Fee" v={`${market.redemptionFee.toFixed(2)}%`} />
                   <ParamRow k="Spot Price" v={fmtUSD(price, price < 10 ? 4 : 2)} />
-                  <ParamRow k="Oracle" v="Pyth" />
+                  <ParamRow k="Oracle (primary)" v={market.oracleSource || 'Pyth'} />
+                  {(market.oracleSecondaries && market.oracleSecondaries.length > 0) && (
+                    <ParamRow k="Oracle (secondary)" v={market.oracleSecondaries.join(', ')} />
+                  )}
                 </>
               );
             })()}

@@ -58,6 +58,39 @@ const PROTOCOL_ARCHETYPE: Record<string, 'pool' | 'cdp'> = {
   navi: 'pool', suilend: 'pool', scallop: 'pool', alphalend: 'pool', bucket: 'cdp',
 };
 
+// ─── Per-protocol oracle configuration ────────────────────────────────────
+//
+// CORRECTION 2026-06: the dashboard previously hardcoded every protocol's
+// oracle to "Pyth", which rendered the Oracle-concentration panel as a false
+// "100% Pyth / single point of failure". That claim is wrong. Pyth is the
+// primary feed everywhere, but most protocols document a secondary:
+//
+//   - NAVI:      Pyth primary + Supra secondary (documented dual-source).
+//   - Suilend:   Pyth primary + Switchboard referenced.
+//   - Scallop:   Pyth + Switchboard + Supra via its xOracle aggregation layer.
+//   - AlphaLend: Pyth only (genuinely single-source).
+//   - Bucket:    Pyth primary + Supra (Supra lists Bucket among Sui integrations).
+//
+// We surface the SET, not a single source. The honest systemic point is no
+// longer "everyone is on one oracle" but "Pyth is primary everywhere and the
+// secondaries' failover weights/staleness thresholds are not public". The
+// `primary` is what feeds the per-market "Oracle" parameter row; `secondaries`
+// drives the concentration panel's per-protocol view.
+interface OracleConfig {
+  protocol: string;
+  primary: string;
+  secondaries: string[];
+  /** Short note on what is and isn't publicly documented. */
+  note: string;
+}
+const PROTOCOL_ORACLES: Record<string, OracleConfig> = {
+  navi:      { protocol: 'navi',      primary: 'Pyth', secondaries: ['Supra'],                  note: 'Documented Pyth + Supra dual-source.' },
+  suilend:   { protocol: 'suilend',   primary: 'Pyth', secondaries: ['Switchboard'],            note: 'Pyth with Switchboard referenced in architecture.' },
+  scallop:   { protocol: 'scallop',   primary: 'Pyth', secondaries: ['Switchboard', 'Supra'],   note: 'xOracle aggregation layer over Pyth, Switchboard, Supra.' },
+  alphalend: { protocol: 'alphalend', primary: 'Pyth', secondaries: [],                         note: 'Pyth only — genuinely single-source.' },
+  bucket:    { protocol: 'bucket',    primary: 'Pyth', secondaries: ['Supra'],                  note: 'Pyth primary; Supra lists Bucket among Sui integrations.' },
+};
+
 interface SnapshotRow {
   protocol: string;
   symbol: string;
@@ -672,6 +705,11 @@ export async function GET() {
       asOf,
       integrityGates,
       riskModel,
+      // Per-protocol oracle configuration (primary + documented secondaries).
+      // Drives the Oracle-concentration panel honestly: Pyth is primary at
+      // every protocol, 4 of 5 document a secondary feed. Only protocols we
+      // actually report are included.
+      oracleConfig: protocols.map((p) => PROTOCOL_ORACLES[p.id] ?? { protocol: p.id, primary: 'Pyth', secondaries: [], note: 'Unknown oracle configuration.' }),
       generatedAt: new Date().toISOString(),
     }, {
       headers: {
@@ -764,7 +802,11 @@ function toPoolRow(r: SnapshotRow) {
     // renders "—" / hides cap-usage rows rather than showing fake 0%.
     supplyCap: null,
     borrowCap: null,
-    oracleSource: r.protocol === 'navi' || r.protocol === 'suilend' || r.protocol === 'scallop' || r.protocol === 'alphalend' ? 'Pyth' : 'Pyth',
+    // Primary oracle for this protocol (feeds the market-detail "Oracle"
+    // parameter row). Full per-protocol oracle SET is in the response's
+    // `oracleConfig` block — see PROTOCOL_ORACLES.
+    oracleSource: (PROTOCOL_ORACLES[r.protocol]?.primary) ?? 'Pyth',
+    oracleSecondaries: PROTOCOL_ORACLES[r.protocol]?.secondaries ?? [],
     // NOTE: `apyHistory` and `history` USED to be 90-element flat-fill arrays
     // here (every entry = today's value, since we don't have real per-day
     // pool history yet). At ~13.8KB per pool × 90 pools that's 1.2MB of pure
@@ -790,6 +832,10 @@ function toVaultRow(r: SnapshotRow) {
     minCR: 110,
     risk: riskTier(r.utilization, r.borrowApy),
     spark: Array.from({ length: 30 }, () => r.totalSupplyUsd / 1e6),
+    // Oracle config so the vault-detail page can render primary + secondary
+    // honestly (was hardcoded "Pyth" in the frontend).
+    oracleSource: (PROTOCOL_ORACLES[r.protocol]?.primary) ?? 'Pyth',
+    oracleSecondaries: PROTOCOL_ORACLES[r.protocol]?.secondaries ?? [],
   };
 }
 
