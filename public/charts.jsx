@@ -37,6 +37,18 @@ const dateLabel = (i, totalDays, withYear = false) => {
   const mon = MONTHS[d.getUTCMonth()];
   return withYear ? `${day} ${mon} '${String(d.getUTCFullYear()).slice(2)}` : `${day} ${mon}`;
 };
+// Evenly-spaced x-axis tick indices for a time series of `len` points across
+// `innerW` px. We aim for roughly one label per `minPx` of width so a wide
+// 90-day chart shows ~10-13 dated ticks (weekly-ish) instead of a sparse 5,
+// while a narrow chart automatically thins out to avoid overlap. Deduped and
+// clamped so short series (len < a few) don't repeat indices or drop labels.
+const xTickIndices = (len, innerW, minPx = 56) => {
+  if (!len || len <= 1) return len ? [0] : [];
+  const count = Math.max(2, Math.min(len, Math.floor((innerW || 600) / minPx)));
+  const idxs = [];
+  for (let k = 0; k < count; k++) idxs.push(Math.round((k * (len - 1)) / (count - 1)));
+  return [...new Set(idxs)];
+};
 window.fmtUSD = fmtUSD; window.fmtNum = fmtNum; window.fmtPct = fmtPct;
 
 // ── AreaChart ────────────────────────────────────────────
@@ -146,7 +158,7 @@ function AreaChart({ series, stacked = false, width = 800, height = 280, formatt
         {/* x labels — real calendar dates ("4 Mar", "26 Mar"), evenly spaced.
             Override with xTickFormatter when the axis is not time (e.g. the
             IRM curve plots utilization 0%→100%). */}
-        {[0, Math.floor(len/4), Math.floor(len/2), Math.floor(3*len/4), len-1].map(i => (
+        {xTickIndices(len, iw).map(i => (
           <text key={i} x={x(i)} y={h - 8} textAnchor="middle" fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-muted)">
             {xTickFormatter ? xTickFormatter(i, len) : dateLabel(i, len)}
           </text>
@@ -294,7 +306,7 @@ function StackedBarChart({ data, keys, colors, width = 800, height = 220, format
             </text>
           </g>
         ))}
-        {[0, Math.floor(n/4), Math.floor(n/2), Math.floor(3*n/4), n-1].map(i => (
+        {xTickIndices(n, iw).map(i => (
           <text key={i} x={x(i) + bw / 2} y={h - 8} textAnchor="middle" fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-muted)">
             {dateLabel(i, n)}
           </text>
