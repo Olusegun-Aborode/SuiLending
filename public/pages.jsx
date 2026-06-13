@@ -44,11 +44,12 @@ const ALL_PROTO_IDS = new Proxy([], {
 
 function PageShell({ pageId, title, terminal, headerRight, children }) {
   const [theme, setTheme] = useStateP(document.body.getAttribute('data-theme') || 'light');
-  // Aesthetic preset (look-and-feel). 'evolved' = the terminal look (default);
-  // 'institutional' = clean SaaS (Inter, sentence case, neutral chrome), ported
-  // from the SDK. Persisted to localStorage; the per-page pre-paint script in
-  // each HTML <head> re-applies it before React mounts so there's no flash.
-  const [aesthetic, setAesthetic] = useStateP(document.body.getAttribute('data-aesthetic') || 'evolved');
+  // Aesthetic preset (look-and-feel). 'institutional' = clean SaaS (Inter,
+  // sentence case, neutral chrome) — the SDK's recommended default (LINT.md §2);
+  // 'evolved' = the older terminal look, now opt-in via the topbar switch.
+  // Persisted to localStorage; the per-page pre-paint script in each HTML <head>
+  // re-applies it before React mounts so there's no flash.
+  const [aesthetic, setAesthetic] = useStateP(document.body.getAttribute('data-aesthetic') || 'institutional');
   const [cmdk, setCmdk] = useStateP(false);
   const [, forceRerender] = useStateP(0);
 
@@ -630,6 +631,11 @@ function ChartPanel({
   timeframes,
   defaultTimeframe,
   caption,
+  // `thesis` renders the SDK `.panel-caption` block under the header (LINT.md
+  // §6/§12: every chart/table panel carries a one-line "what it is + why it
+  // matters"). Distinct from `caption` (a tiny inline subtitle by the title)
+  // and `description` (the full hover-ⓘ methodology text).
+  thesis,
   description,
   className = '',
   render,
@@ -771,6 +777,7 @@ function ChartPanel({
             </button>
           </div>
         </div>
+        {thesis && <div className="panel-caption">{thesis}</div>}
         <div className="panel-body">{render({ proto, metric, size: 'normal', timeframe })}</div>
         {/* No more footer. Insight + source + as-of all live in the header ⓘ.
             The `insight` prop is preserved on the API for back-compat but
@@ -829,7 +836,7 @@ function PageOverview() {
   const tvlNote = `TVL sums per-protocol methods (mixed basis):\n${tvlBreakdownNote}\n\nThis sum does NOT equal Supplied − Borrowed because each protocol's UI reports a different TVL definition (some net, some gross, some via remote canonical fetch). We match each protocol's own headline number, then sum. See Methodology page for the per-protocol calibration.`;
 
   return (
-    <PageShell pageId="overview" title="Lending Terminal: SUI — Overview" terminal="lending-terminal-sui-overview">
+    <PageShell pageId="overview" title="Lending Terminal: SUI Overview" terminal="lending-terminal-sui-overview">
       {/* Data Integrity + Methodology moved to their own page (sidebar
           → Workspace → Methodology). Overview now leads with the headline
           KPIs and the chart grid — no audit chrome before the user sees
@@ -848,6 +855,7 @@ function PageOverview() {
 
       <div className="grid grid-12" style={{ marginTop: 16 }}>
         <ChartPanel
+          thesis="Total value locked by protocol. Shows which venues hold the sector's deposits and how that mix shifts."
           title="TVL by Protocol"
           className="col-8"
           protocolMode="multi"
@@ -901,6 +909,7 @@ function PageOverview() {
         />
 
         <ChartPanel
+          thesis="Each protocol's share of today's total. A lopsided mix means the sector rides on a few venues."
           title="Protocol Mix"
           className="col-4"
           protocolMode="none"
@@ -951,6 +960,7 @@ function PageOverview() {
 
       <div style={{ marginTop: 16 }}>
         <ChartPanel
+          thesis="Daily supply, borrow and liquidation-repay volume across all five protocols, a read on whether lending is expanding or contracting."
           title="Daily Flows"
           protocolMode="none"
           description="Daily $-volume of supply deposits, borrow draws, and liquidation repayments aggregated across all 5 protocols. Stacked bars show the mix on each day; the tooltip's TOTAL line tells you total daily activity. Filter to a single flow type via the Data dropdown."
@@ -1284,9 +1294,10 @@ function PageProtocol() {
 
       <div className="grid grid-12" style={{ marginTop: 16 }}>
         <ChartPanel
+          thesis="This protocol's selected metric over the last 30 days, the trend behind its current standing in the sector."
           title={({ metric }) => {
             const labels = { tvl: 'TVL', supply: 'Total Supplied', borrow: 'Total Borrowed', revenue: 'Revenue' };
-            return `${proto.name} — ${labels[metric] || 'TVL'} (30D)`;
+            return `${proto.name}: ${labels[metric] || 'TVL'} (30D)`;
           }}
           className="col-8"
           protocolMode="none"
@@ -1310,6 +1321,7 @@ function PageProtocol() {
         />
 
         <ChartPanel
+          thesis="This protocol's markets ranked by the selected metric, where its deposits and borrows concentrate."
           title="Markets"
           className="col-4"
           protocolMode="none"
@@ -1435,7 +1447,8 @@ function PageRates() {
 
       <div style={{ marginTop: 16 }}>
         <ChartPanel
-          title="Lending markets — rates, utilization, supply"
+          thesis="Every pool across the four pool-archetype protocols. Compare rate, utilization and size to see where capital works hardest."
+          title="Lending markets: rates, utilization, supply"
           caption="every pool across the 4 pool-archetype protocols"
           protocolMode="single"
           description="Snapshot of all lending markets on Sui from the four pool-archetype protocols (NAVI, Suilend, Scallop, AlphaLend). Click a row to drill into the market. Sort by any column from the dropdown. Spread = borrow APY − supply APY (what the protocol + suppliers split). Kink = utilization where the IRM bends into the jump-rate regime."
@@ -1501,7 +1514,8 @@ function PageRates() {
 
       <div style={{ marginTop: 16 }}>
         <ChartPanel
-          title="Bucket vaults — collateral, debt, fees"
+          thesis="Every CDP vault on Bucket. The minimum collateral ratio and fees set how safely each one mints USDB."
+          title="Bucket vaults: collateral, debt, fees"
           caption="every CDP vault on Bucket Protocol"
           description="Bucket runs a single-asset-mint CDP: deposit collateral, mint USDB (or BUCK on V1). Min CR is the minimum collateral ratio before a vault is redemption-eligible. Redemption fee is paid by the redeemer when they swap USDB for collateral. PSM fee is the spread on direct stablecoin-to-USDB swaps."
           protocolMode="none"
@@ -1617,6 +1631,7 @@ function PageRevenue() {
 
       <div className="grid grid-12" style={{ marginTop: 16 }}>
         <ChartPanel
+          thesis="Protocol revenue broken down by source, the engine behind each venue's sustainability."
           title="Where the fee revenue comes from"
           caption="last 30 days, stacked by protocol"
           className="col-8"
@@ -1642,6 +1657,7 @@ function PageRevenue() {
         />
 
         <ChartPanel
+          thesis="Share of fee revenue by protocol. Concentrated fees mean the sector's economics lean on a few names."
           title="Fee Mix"
           className="col-4"
           protocolMode="none"
@@ -1667,6 +1683,7 @@ function PageRevenue() {
 
       <div style={{ marginTop: 16 }}>
         <ChartPanel
+          thesis="Daily fee revenue per protocol, who actually earns from lending activity on Sui."
           title="Per-Protocol Revenue"
           protocolMode="single"
           metricItems={null}
@@ -1898,6 +1915,7 @@ function PageCollateral() {
 
       <div className="grid grid-12" style={{ marginTop: 16 }}>
         <ChartPanel
+          thesis="What backs the sector's loans, by asset. Concentration here is the collateral risk that aggregate TVL hides."
           title="Collateral by Asset"
           className="col-6"
           protocolMode="single"
@@ -1912,6 +1930,7 @@ function PageCollateral() {
         />
 
         <ChartPanel
+          thesis="Where collateral sits, by venue, which protocols custody the most deposit risk."
           title="Collateral by Protocol"
           className="col-6"
           protocolMode="none"
@@ -1935,6 +1954,7 @@ function PageCollateral() {
 
       <div style={{ marginTop: 16 }}>
         <ChartPanel
+          thesis="How each collateral asset is spread across protocols, the cross-venue exposure map."
           title="Asset → Protocol Allocation"
           protocolMode="single"
           metricItems={null}
@@ -2302,7 +2322,8 @@ function PageLiquidation() {
 
       <div style={{ marginTop: 16 }}>
         <ChartPanel
-          title="Liquidation Volume by Protocol — 30D"
+          thesis="Where forced liquidations are landing. Spikes flag stressed collateral or thin liquidity at a venue."
+          title="Liquidation Volume by Protocol (30D)"
           protocolMode="multi"
           metricItems={[
             { id: 'volume', label: 'USD Repaid' },
@@ -2330,6 +2351,7 @@ function PageLiquidation() {
 
       <div style={{ marginTop: 16 }}>
         <ChartPanel
+          thesis="The latest liquidation events. Each row is a real position closed at a loss, the clearest live signal of borrower stress."
           title="Recent Liquidations"
           protocolMode="single"
           metricItems={[
@@ -2552,7 +2574,8 @@ function PageMarketDetail() {
         {/* History charts */}
         <div className="grid grid-12" style={{ marginTop: 16 }}>
           <ChartPanel
-            title={`${marketSym} — Supply & Borrow History`}
+            thesis="This market's supply and borrow balances over time, the demand and liquidity behind its current rate."
+            title={`${marketSym}: Supply & Borrow History`}
             className="col-6"
             protocolMode="none"
             metricItems={[
@@ -2579,7 +2602,8 @@ function PageMarketDetail() {
           />
 
           <ChartPanel
-            title={`${marketSym} — APY History`}
+            thesis="Supply and borrow APY over time, what lenders earned and borrowers paid in this market."
+            title={`${marketSym}: APY History`}
             className="col-6"
             protocolMode="none"
             metricItems={null}
@@ -2601,7 +2625,8 @@ function PageMarketDetail() {
         {/* Interest rate curve */}
         <div style={{ marginTop: 16 }}>
           <ChartPanel
-            title={`${marketSym} — Interest Rate Curve (model)`}
+            thesis="The modelled rate curve: how borrow APY climbs with utilization and where the kink bends into the jump regime."
+            title={`${marketSym}: Interest Rate Curve (model)`}
             protocolMode="none"
             metricItems={null}
             render={({ size }) => {
@@ -2727,7 +2752,8 @@ function PageMarketDetail() {
 
       <div style={{ marginTop: 16 }}>
         <ChartPanel
-          title={`${marketSym} Vault — TVL trend`}
+          thesis="This vault's total value locked over time, a read on deposit confidence in the collateral."
+          title={`${marketSym} Vault: TVL trend`}
           protocolMode="none"
           metricItems={null}
           render={({ size }) => {
