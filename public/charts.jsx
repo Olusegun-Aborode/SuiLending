@@ -40,15 +40,6 @@ const dateLabel = (i, totalDays, withYear = false) => {
 window.fmtUSD = fmtUSD; window.fmtNum = fmtNum; window.fmtPct = fmtPct;
 
 // ── AreaChart ────────────────────────────────────────────
-// ── Chart watermark ─────────────────────────────────────
-function ChartWatermark({ x, y }) {
-  return (
-    <text x={x} y={y} textAnchor="end" fontFamily="var(--font-mono)"
-      fontSize="11" fill="var(--fg-muted)" opacity="0.14" style={{ pointerEvents: 'none', letterSpacing: '0.12em' }}>
-      DATUM LABS · SUI LENDING
-    </text>
-  );
-}
 
 // series: [{ name, color, values: number[] }, ...]
 // stacked: boolean
@@ -202,7 +193,6 @@ function AreaChart({ series, stacked = false, width = 800, height = 280, formatt
             ))}
           </g>
         )}
-        <ChartWatermark x={w - 20} y={padT + 16} />
       </svg>
       {hover && (() => {
         // Convert tooltip x/y from svg-space back to css px so absolute
@@ -341,7 +331,6 @@ function StackedBarChart({ data, keys, colors, width = 800, height = 220, format
               fill="var(--orange)" stroke="var(--surface)" strokeWidth="1.5" />
           </g>
         )}
-        <ChartWatermark x={w - 20} y={padT + 16} />
       </svg>
       {hover && (() => {
         // Convert svg-space hover position → CSS percentages so absolute
@@ -652,7 +641,6 @@ function Candlestick({ data, width = 400, height = 180 }) {
             </g>
           );
         })}
-        <ChartWatermark x={width - 12} y={padT + 14} />
       </svg>
       {hover && (
         <div className="chart-tooltip" style={{ left: Math.min(hover.x + 10, width - 140), top: 4 }}>
