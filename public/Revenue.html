@@ -12,10 +12,8 @@
   (function() {
     try {
       var t = localStorage.getItem('theme');
-      var a = localStorage.getItem('aesthetic');
       var d = localStorage.getItem('density');
       if (t) document.body.setAttribute('data-theme', t);
-      if (a) document.body.setAttribute('data-aesthetic', a);
       if (d) document.body.setAttribute('data-density', d);
     } catch(e) {}
   })();

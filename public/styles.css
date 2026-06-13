@@ -1,8 +1,7 @@
 /* Datum Labs — Redesigned Dashboard Shell
- * Three aesthetic directions toggled via data-aesthetic on <body>:
- *   [data-aesthetic="refined"]  → Refined TUI, closest to today
- *   [data-aesthetic="evolved"]  → Terminal → Analytics (default)
- *   [data-aesthetic="modern"]   → Modern Analytics, minimal chrome
+ * Single locked aesthetic: data-aesthetic="institutional" (clean SaaS look,
+ * per the SDK LINT.md). The old refined / evolved / modern presets were
+ * removed; institutional is the only look the dashboard ships.
  * Light/dark toggled via data-theme="light|dark" on <body>.
  * Density via data-density="cozy|compact".
  */
@@ -154,48 +153,6 @@ body[data-theme="dark"] {
   --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.7);
 }
 
-/* Aesthetic: Refined TUI — tighter, more chrome */
-body[data-aesthetic="refined"] {
-  --panel-radius: 3px;
-  --panel-pad: 14px;
-  --grid-gap: 10px;
-}
-body[data-aesthetic="refined"] .panel::before {
-  content: "";
-  position: absolute; top: 0; left: 0; right: 0; height: 1px;
-  background: linear-gradient(90deg, transparent, var(--orange), transparent);
-  opacity: 0.5; pointer-events: none;
-}
-body[data-aesthetic="refined"] .scanlines {
-  background-image: repeating-linear-gradient(transparent, transparent 2px, rgba(0,0,0,0.02) 2px, rgba(0,0,0,0.02) 3px);
-}
-
-/* Aesthetic: Modern Analytics — minimal chrome, no panel headers */
-body[data-aesthetic="modern"] {
-  --panel-radius: 10px;
-  --panel-pad: 24px;
-  --grid-gap: 20px;
-}
-body[data-aesthetic="modern"] .panel {
-  border: none;
-  background: var(--surface);
-  /* Theme-aware token — flips to inset-highlight + heavier drop in dark mode */
-  box-shadow: var(--shadow-sm);
-}
-body[data-aesthetic="modern"] .panel-header {
-  border-bottom: none;
-  background: transparent;
-  padding-bottom: 0;
-  padding-top: 18px;
-}
-body[data-aesthetic="modern"] .panel-title {
-  color: var(--fg-muted);
-  font-family: var(--font-sans);
-  font-size: 12px;
-  letter-spacing: 0.02em;
-  text-transform: none;
-  font-weight: 600;
-}
 
 /* Density */
 body[data-density="compact"] {
@@ -613,7 +570,6 @@ body[data-theme="dark"] .time-range button.active { background: var(--surface-2)
   gap: 12px;
   min-height: 44px;
 }
-body[data-aesthetic="evolved"] .panel-header { background: transparent; }
 .panel-title {
   font-family: var(--font-mono);
   font-size: 11px; font-weight: 600;
@@ -675,7 +631,6 @@ body[data-aesthetic="evolved"] .panel-header { background: transparent; }
   color: var(--fg);
 }
 body[data-density="compact"] .metric-value { font-size: 24px; }
-body[data-aesthetic="refined"] .metric-value { font-size: 24px; }
 .metric-footer {
   display: flex; align-items: center; gap: 8px;
   font-family: var(--font-mono); font-size: 11px;

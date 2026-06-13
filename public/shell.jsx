@@ -31,7 +31,7 @@ function navTo(id) {
 }
 window.navTo = navTo;
 
-function Topbar({ title, onOpenCmdk, theme, setTheme, aesthetic, setAesthetic }) {
+function Topbar({ title, onOpenCmdk, theme, setTheme }) {
   return (
     <header className="topbar">
       <div className="topbar-left">
@@ -50,20 +50,6 @@ function Topbar({ title, onOpenCmdk, theme, setTheme, aesthetic, setAesthetic })
           <kbd>⌘K</kbd>
         </button>
         <span className="live-pill"><span className="dot" />LIVE · 2s ago</span>
-        {/* Look-switcher (aesthetic preset). Reuses the .theme-toggle segmented
-            styling. 'evolved' = terminal look (default); 'institutional' = clean
-            SaaS look ported from the SDK. Guarded so it no-ops if the page didn't
-            pass the aesthetic props. */}
-        {setAesthetic && (
-          <div className="theme-toggle look-toggle" role="tablist" aria-label="Look">
-            <button className={aesthetic !== 'institutional' ? 'active' : ''} onClick={() => setAesthetic('evolved')} title="Terminal look (Evolved)" aria-label="Terminal look">
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600 }}>❯_</span>
-            </button>
-            <button className={aesthetic === 'institutional' ? 'active' : ''} onClick={() => setAesthetic('institutional')} title="Clean look (Institutional)" aria-label="Clean institutional look">
-              <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '-0.02em' }}>Aa</span>
-            </button>
-          </div>
-        )}
         <div className="theme-toggle" role="tablist" aria-label="Theme">
           <button className={theme === 'light' ? 'active' : ''} onClick={() => setTheme('light')} title="Light">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>

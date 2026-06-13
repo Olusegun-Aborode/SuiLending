@@ -44,24 +44,17 @@ const ALL_PROTO_IDS = new Proxy([], {
 
 function PageShell({ pageId, title, terminal, headerRight, children }) {
   const [theme, setTheme] = useStateP(document.body.getAttribute('data-theme') || 'light');
-  // Aesthetic preset (look-and-feel). 'institutional' = clean SaaS (Inter,
-  // sentence case, neutral chrome) — the SDK's recommended default (LINT.md §2);
-  // 'evolved' = the older terminal look, now opt-in via the topbar switch.
-  // Persisted to localStorage; the per-page pre-paint script in each HTML <head>
-  // re-applies it before React mounts so there's no flash.
-  const [aesthetic, setAesthetic] = useStateP(document.body.getAttribute('data-aesthetic') || 'institutional');
   const [cmdk, setCmdk] = useStateP(false);
   const [, forceRerender] = useStateP(0);
+
+  // Aesthetic is locked to 'institutional' (the SDK's clean SaaS look). It's
+  // hardcoded on the <body> in every HTML page; there is no longer a runtime
+  // switcher or an alternate terminal look.
 
   useEffectP(() => {
     document.body.setAttribute('data-theme', theme);
     try { localStorage.setItem('theme', theme); } catch(e) {}
   }, [theme]);
-
-  useEffectP(() => {
-    document.body.setAttribute('data-aesthetic', aesthetic);
-    try { localStorage.setItem('aesthetic', aesthetic); } catch(e) {}
-  }, [aesthetic]);
 
   useEffectP(() => {
     const h = (e) => {
@@ -127,7 +120,7 @@ function PageShell({ pageId, title, terminal, headerRight, children }) {
 
   return (
     <>
-      <Topbar title={terminal} onOpenCmdk={() => setCmdk(true)} theme={theme} setTheme={setTheme} aesthetic={aesthetic} setAesthetic={setAesthetic} />
+      <Topbar title={terminal} onOpenCmdk={() => setCmdk(true)} theme={theme} setTheme={setTheme} />
       <Sidebar current={pageId} />
       <main className="main">
         <div className="page-header">
