@@ -430,76 +430,10 @@ function Donut({ items, size = 140, thickness = 22 }) {
   );
 }
 
-// Half-circle gauge for headline risk probabilities. Reads instantly,
-// supports red/amber/green bands. `value` ∈ [0,1]. `bands` is two
-// breakpoints (e.g. [0.05, 0.20]) — under first = green, between = amber,
-// above second = red. Used by the Modeled Risk panel.
-function Gauge({ value, bands = [0.05, 0.20], width = 240, height = 130, label }) {
-  const v = Math.max(0, Math.min(1, value));
-  const cx = width / 2, cy = height - 18, r = Math.min(width / 2, height) - 22;
-  const polar = (t) => {
-    const ang = Math.PI * (1 - t);
-    return [cx + r * Math.cos(ang), cy - r * Math.sin(ang)];
-  };
-  const arc = (a, b, color, w = 14) => {
-    const [x1, y1] = polar(a), [x2, y2] = polar(b);
-    const large = (b - a) > 0.5 ? 1 : 0;
-    return (
-      <path d={`M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2}`}
-        fill="none" stroke={color} strokeWidth={w} strokeLinecap="round" />
-    );
-  };
-  const color = v < bands[0] ? 'var(--green)' : v < bands[1] ? 'var(--orange)' : 'var(--red)';
-  const [tx, ty] = polar(v);
-  return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
-      {/* background bands */}
-      {arc(0, bands[0], 'var(--green)', 10)}
-      {arc(bands[0], bands[1], 'var(--orange)', 10)}
-      {arc(bands[1], 1, 'var(--red)', 10)}
-      {/* needle */}
-      <line x1={cx} y1={cy} x2={tx} y2={ty} stroke="var(--fg)" strokeWidth={2} strokeLinecap="round" />
-      <circle cx={cx} cy={cy} r={4} fill="var(--fg)" />
-      {/* labels */}
-      <text x={cx} y={cy - r - 8} textAnchor="middle" style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 600, fill: color }}>
-        {(v * 100).toFixed(1)}%
-      </text>
-      {label && <text x={cx} y={cy + 16} textAnchor="middle" style={{ fontFamily: 'var(--font-mono)', fontSize: 10, fill: 'var(--fg-muted)' }}>{label}</text>}
-      <text x={polar(0)[0]} y={polar(0)[1] + 14} textAnchor="middle" style={{ fontFamily: 'var(--font-mono)', fontSize: 9, fill: 'var(--fg-muted)' }}>0%</text>
-      <text x={polar(1)[0]} y={polar(1)[1] + 14} textAnchor="middle" style={{ fontFamily: 'var(--font-mono)', fontSize: 9, fill: 'var(--fg-muted)' }}>100%</text>
-    </svg>
-  );
-}
-
-// Horizontal paired bars for comparing two estimates side-by-side
-// (e.g. Historical-VaR vs Heavy-tail VaR). `rows: [{label, a, b, max?, ...}]`.
-function PairedBars({ rows, aLabel, bLabel, aColor = 'var(--blue)', bColor = 'var(--orange)', max, width = 360, formatter = (v) => v.toFixed(2) }) {
-  const peak = max || Math.max(0.0001, ...rows.flatMap(r => [r.a, r.b]));
-  const barW = (v) => Math.max(2, (v / peak) * (width - 100));
-  return (
-    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
-      <div style={{ display: 'flex', gap: 14, marginBottom: 8, fontSize: 10, color: 'var(--fg-muted)' }}>
-        <span><span style={{ display: 'inline-block', width: 10, height: 10, background: aColor, borderRadius: 2, marginRight: 4, verticalAlign: 'middle' }} />{aLabel}</span>
-        <span><span style={{ display: 'inline-block', width: 10, height: 10, background: bColor, borderRadius: 2, marginRight: 4, verticalAlign: 'middle' }} />{bLabel}</span>
-      </div>
-      {rows.map((r, i) => (
-        <div key={i} style={{ display: 'grid', gridTemplateColumns: '60px 1fr', gap: 12, alignItems: 'center', marginBottom: 8 }}>
-          <div style={{ color: 'var(--fg-muted)', fontWeight: 600 }}>{r.label}</div>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
-              <div style={{ height: 10, width: barW(r.a), background: aColor, borderRadius: 2 }} />
-              <span style={{ color: aColor, fontSize: 11 }}>{formatter(r.a)}</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ height: 10, width: barW(r.b), background: bColor, borderRadius: 2 }} />
-              <span style={{ color: bColor, fontSize: 11 }}>{formatter(r.b)}</span>
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
+// NOTE 2026-06: Gauge and PairedBars were removed here. Both were built
+// solely for the Modeled-Risk panel (the half-circle probability gauge and
+// the Historical-vs-Heavy-tail VaR bars). That panel was removed (RM-1), so
+// the components were orphaned. Deleted as part of a stale-code sweep.
 
 // Asset-symbol normalization for the Collateral page.
 //
@@ -2272,9 +2206,11 @@ function PageRisk() {
         </div>
       </div>
 
-      {/* Modeled risk (Monte Carlo) removed 2026-06-01 — see placeholder
-          earlier in PageRisk + RM-1. Backend still emits `riskModel` for
-          back-compat; nothing on this page consumes it now. */}
+      {/* Modeled risk (Monte Carlo) removed 2026-06-01, see placeholder
+          earlier in PageRisk + RM-1. The backend riskModel computation was
+          also removed 2026-06 (it ran 5000 MC paths per request for a field
+          nothing read); the simulator is parked in src/lib/risk-modeling.ts
+          for when per-wallet indexing lands. */}
     </PageShell>
   );
 }

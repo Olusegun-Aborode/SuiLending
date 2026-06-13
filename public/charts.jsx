@@ -17,11 +17,25 @@ const fmtNum = (v, d = 2) => {
   return v.toFixed(d);
 };
 const fmtPct = (v, d = 2) => `${v.toFixed(d)}%`;
-const daysAgoLabel = (offsetFromNow, totalDays) => {
-  const ago = totalDays - 1 - offsetFromNow;
-  if (ago === 0) return 'Today';
-  if (ago === 1) return 'Yesterday';
-  return `${ago}d ago`;
+
+// Calendar-date label for time-series x-axes. Standard charts show real
+// dates on the axis ("4 Mar", "26 Mar"), not "89d ago / 67d ago". `i` is the
+// index in the series (0 = oldest, totalDays-1 = most recent). We anchor the
+// most-recent point to the API's as-of server time when available, else now,
+// and step back one day per index. British day-month order. `withYear` adds
+// a 2-digit year for tooltips where the full date matters.
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const dateLabel = (i, totalDays, withYear = false) => {
+  const ago = totalDays - 1 - i;
+  let anchor;
+  try {
+    const st = window.SUI_LENDING_DATA && window.SUI_LENDING_DATA.asOf && window.SUI_LENDING_DATA.asOf.serverTime;
+    anchor = st ? new Date(st) : new Date();
+  } catch (e) { anchor = new Date(); }
+  const d = new Date(anchor.getTime() - ago * 86400000);
+  const day = d.getUTCDate();
+  const mon = MONTHS[d.getUTCMonth()];
+  return withYear ? `${day} ${mon} '${String(d.getUTCFullYear()).slice(2)}` : `${day} ${mon}`;
 };
 window.fmtUSD = fmtUSD; window.fmtNum = fmtNum; window.fmtPct = fmtPct;
 
@@ -138,12 +152,12 @@ function AreaChart({ series, stacked = false, width = 800, height = 280, formatt
             </text>
           </g>
         ))}
-        {/* x labels — default formatter is "Today / Xd ago" (time-series).
-            Override with xTickFormatter when the axis is something else
-            (e.g. the IRM curve plots utilization 0%→100%, not time). */}
+        {/* x labels — real calendar dates ("4 Mar", "26 Mar"), evenly spaced.
+            Override with xTickFormatter when the axis is not time (e.g. the
+            IRM curve plots utilization 0%→100%). */}
         {[0, Math.floor(len/4), Math.floor(len/2), Math.floor(3*len/4), len-1].map(i => (
           <text key={i} x={x(i)} y={h - 8} textAnchor="middle" fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-muted)">
-            {xTickFormatter ? xTickFormatter(i, len) : daysAgoLabel(i, len)}
+            {xTickFormatter ? xTickFormatter(i, len) : dateLabel(i, len)}
           </text>
         ))}
         {/* areas and lines */}
@@ -203,7 +217,7 @@ function AreaChart({ series, stacked = false, width = 800, height = 280, formatt
             left: `${cssX}%`,
             top: `${cssY}%`,
           }}>
-            <div className="t-date">{daysAgoLabel(hover.i, len)}</div>
+            <div className="t-date">{xTickFormatter ? xTickFormatter(hover.i, len) : dateLabel(hover.i, len, true)}</div>
             {series.map(s => (
               <div key={s.name} className="t-row">
                 <span className="t-label"><span className="legend-swatch" style={{ background: s.color, marginRight: 6 }} />{s.name}</span>
@@ -292,7 +306,7 @@ function StackedBarChart({ data, keys, colors, width = 800, height = 220, format
         ))}
         {[0, Math.floor(n/4), Math.floor(n/2), Math.floor(3*n/4), n-1].map(i => (
           <text key={i} x={x(i) + bw / 2} y={h - 8} textAnchor="middle" fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-muted)">
-            {daysAgoLabel(i, n)}
+            {dateLabel(i, n)}
           </text>
         ))}
         {data.map((d, i) => {
@@ -340,7 +354,7 @@ function StackedBarChart({ data, keys, colors, width = 800, height = 220, format
             left: `${cssX}%`,
             top: `${cssY}%`,
           }}>
-            <div className="t-date">{daysAgoLabel(hover.i, n)}</div>
+            <div className="t-date">{dateLabel(hover.i, n, true)}</div>
             {keys.map((k, ki) => (
               <div key={k} className="t-row">
                 <span className="t-label">
@@ -653,264 +667,14 @@ function Candlestick({ data, width = 400, height = 180 }) {
   );
 }
 
-// ── Histogram ────────────────────────────────────────────
-//
-// Distribution primitive — ported in from the Datum Labs Dashboard SDK
-// (chart.jsx as of 2026-05). Richer than the original lending-only version
-// it replaced. Two accepted input shapes:
-//
-//   1. New SDK shape (preferred):
-//        values:  number[]                — raw observations, auto-binned
-//        weight:  number[]                — optional, same length as values;
-//                                            bar height becomes Σ weight
-//                                            instead of count (e.g. $ at risk)
-//        binCount / binWidth              — control binning
-//        clampRange:[lo,hi]               — fold outliers into the end bins
-//        markers: [{value,label,color}]   — vertical reference lines
-//        colorBands:[{from,to,color}]     — backdrop bands + per-bar colour
-//        xLabel / yLabel                  — axis titles inside the SVG
-//
-//   2. Legacy shape (still supported for older callers):
-//        bins: [{ label, count, value?, color? }]
-//        referenceX, referenceLabel, countLabel, valueLabel, valueFormatter
-//      Internally adapted into the new shape so the same render path runs.
-//
-// Tooltip shows the bin range, count, weight (if weighted), and share.
-const fmtEdge = (n) => {
-  if (!Number.isFinite(n)) return '∞';
-  if (Math.abs(n) >= 1000) return fmtNum(n, 1);
-  return Number.isInteger(n) ? String(n) : n.toFixed(2);
-};
-function Histogram({
-  // New SDK API
-  values, bins: preBinsRaw, weight, binCount = 20, binWidth,
-  clampRange, markers = [], colorBands = [],
-  xLabel, yLabel, valueFormat = fmtUSD,
-  // Visual
-  width = 480, height = 220, color = 'var(--chart-1)',
-  // Legacy API (older callers may still pass this shape — translated below)
-  referenceX = null, referenceLabel = null,
-  countLabel = 'Count', valueLabel,
-  valueFormatter,
-}) {
-  // Translate legacy `[{label, count, value, color}]` bins to the SDK's
-  // `[{x0, x1, count, weight}]` shape so the new render path can handle both.
-  // We assume legacy bins are sequential (one per ordinal index); x0/x1 are
-  // their indices so axis labels still line up. Legacy `referenceX` (a bin
-  // index) becomes a marker at the same index.
-  let preBins = preBinsRaw;
-  const legacyMode = !preBins && !values && Array.isArray(arguments[0]?.bins);
-  if (legacyMode) {
-    const raw = arguments[0].bins;
-    preBins = raw.map((b, i) => ({
-      x0: i, x1: i + 1, count: b.count || 0, weight: b.value ?? b.count ?? 0,
-      _label: b.label, _color: b.color,
-    }));
-    if (referenceX != null && referenceX >= 0 && referenceX < raw.length) {
-      markers = [{ value: referenceX + 0.5, label: referenceLabel ?? 'ref', color: 'var(--red)' }, ...markers];
-    }
-  }
+// NOTE 2026-06: Histogram, fmtEdge, and HealthFactorHistogram were removed
+// here. They were ported from the Datum Labs SDK (SDK.1) for the Risk page's
+// HF distribution and the Monte Carlo loss histogram. Both panels were
+// removed (RM-1) when the market-aggregate Health Factor they consumed was
+// found to be a utilisation ratio, not a real HF. With no remaining
+// consumers, these primitives are dead; re-port from the SDK if a real
+// per-wallet HF distribution returns.
 
-  const padL = 50, padR = 18, padT = 16, padB = xLabel ? 38 : 28;
-  const iw = width - padL - padR, ih = height - padT - padB;
-  const [hover, setHover] = useState(null);
-
-  const weighted = !!(weight && weight.length) || !!(preBins && preBins.some(b => b.weight != null && b.weight !== b.count));
-
-  const { bins, total } = useMemo(() => {
-    let outBins;
-    if (preBins && preBins.length) {
-      outBins = preBins.map(b => ({
-        x0: b.x0, x1: b.x1,
-        count: b.count ?? 0,
-        weight: b.weight ?? b.count ?? 0,
-        _label: b._label, _color: b._color,
-      }));
-    } else {
-      const vals = values || [];
-      let lo, hi;
-      if (clampRange) { lo = clampRange[0]; hi = clampRange[1]; }
-      else { lo = vals.length ? Math.min(...vals) : 0; hi = vals.length ? Math.max(...vals) : 1; }
-      if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) { lo = lo || 0; hi = lo + 1; }
-      let nBins, bw;
-      if (binWidth) { bw = binWidth; nBins = Math.max(1, Math.ceil((hi - lo) / bw)); }
-      else { nBins = Math.max(1, Math.round(binCount)); bw = (hi - lo) / nBins; }
-      outBins = Array.from({ length: nBins }, (_, i) => ({ x0: lo + i * bw, x1: lo + (i + 1) * bw, count: 0, weight: 0 }));
-      vals.forEach((v, idx) => {
-        const w = weighted ? (weight[idx] ?? 0) : 1;
-        const cv = clampRange ? Math.max(lo, Math.min(hi - 1e-9, v)) : v;
-        let bi = Math.floor((cv - lo) / bw);
-        if (bi < 0) bi = 0;
-        if (bi >= nBins) bi = nBins - 1;
-        outBins[bi].count += 1;
-        outBins[bi].weight += w;
-      });
-    }
-    const total = outBins.reduce((a, b) => a + (weighted ? b.weight : b.count), 0) || 1;
-    return { bins: outBins, total };
-  }, [values, preBins, weight, binCount, binWidth, clampRange, weighted]);
-
-  if (!bins.length) return null;
-
-  const metric = (b) => (weighted ? b.weight : b.count);
-  const maxY = (Math.max(...bins.map(metric)) || 1) * 1.1;
-  const x0v = bins[0].x0, x1v = bins[bins.length - 1].x1;
-  const span = (x1v - x0v) || 1;
-  const xPx = (v) => padL + ((v - x0v) / span) * iw;
-  const y = (v) => padT + ih - (v / maxY) * ih;
-
-  const bandColor = (b) => {
-    if (b._color) return b._color;
-    if (!colorBands.length) return color;
-    const c = (b.x0 + b.x1) / 2;
-    const band = colorBands.find(bd => c >= bd.from && c < bd.to);
-    return band ? band.color : color;
-  };
-
-  const ticks = [0, 0.25, 0.5, 0.75, 1].map(t => maxY * t);
-
-  // x edge ticks, thinned so labels stay legible with many bins.
-  // For legacy mode we prefer the supplied bin labels instead of edge numbers.
-  const edgeStep = Math.max(1, Math.ceil(bins.length / 8));
-  const edges = legacyMode
-    ? bins.filter((_, i) => i % edgeStep === 0 || i === bins.length - 1).map((b, idx, arr) => ({ at: (b.x0 + b.x1) / 2, label: b._label ?? fmtEdge(b.x0) }))
-    : bins.filter((_, i) => i % edgeStep === 0).map(b => b.x0).concat([x1v]).map(e => ({ at: e, label: fmtEdge(e) }));
-
-  return (
-    <div style={{ position: 'relative', width: '100%' }}>
-      <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height}
-        style={{ display: 'block', cursor: 'crosshair' }}
-        onMouseLeave={() => setHover(null)}>
-        {/* y grid */}
-        {ticks.map((t, i) => (
-          <g key={i}>
-            <line x1={padL} x2={width - padR} y1={y(t)} y2={y(t)} stroke="var(--border)" strokeDasharray="2 3" />
-            <text x={padL - 8} y={y(t) + 4} textAnchor="end" fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-muted)">
-              {weighted ? valueFormat(t, t >= 1000 ? 1 : 0) : fmtNum(t, 0)}
-            </text>
-          </g>
-        ))}
-        {/* x edge ticks */}
-        {edges.map((e, i) => (
-          <text key={i} x={xPx(e.at)} y={height - (xLabel ? 16 : 8)} textAnchor="middle" fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-muted)">
-            {e.label}
-          </text>
-        ))}
-        {/* axis titles */}
-        {xLabel && (
-          <text x={padL + iw / 2} y={height - 1} textAnchor="middle" fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-dim)" style={{ letterSpacing: '0.06em' }}>{xLabel}</text>
-        )}
-        {yLabel && (
-          <text x={12} y={padT + ih / 2} textAnchor="middle" fontSize="10" fontFamily="var(--font-mono)" fill="var(--fg-dim)"
-            transform={`rotate(-90 12 ${padT + ih / 2})`} style={{ letterSpacing: '0.06em' }}>{yLabel}</text>
-        )}
-        {/* colour bands (faint backdrop) */}
-        {colorBands.map((bd, i) => {
-          const from = Math.max(x0v, bd.from);
-          const to = Math.min(x1v, Number.isFinite(bd.to) ? bd.to : x1v);
-          if (to <= from) return null;
-          return <rect key={i} x={xPx(from)} y={padT} width={Math.max(0, xPx(to) - xPx(from))} height={ih} fill={bd.color} opacity="0.05" />;
-        })}
-        {/* bars */}
-        {bins.map((b, i) => {
-          const bx0 = xPx(b.x0), bx1 = xPx(b.x1);
-          const bw = Math.max(0, bx1 - bx0 - 1);
-          const top = y(metric(b));
-          return (
-            <g key={i} onMouseEnter={() => setHover(i)}>
-              <rect x={bx0 + 0.5} y={top} width={bw} height={Math.max(0, padT + ih - top)}
-                fill={bandColor(b)} opacity={hover != null && hover !== i ? 0.4 : 0.85} />
-              {/* full-height hit target */}
-              <rect x={bx0} y={padT} width={Math.max(1, bx1 - bx0)} height={ih} fill="transparent" />
-            </g>
-          );
-        })}
-        {/* markers (vertical reference lines) */}
-        {markers.filter(m => m.value >= x0v && m.value <= x1v).map((m, i) => (
-          <g key={i}>
-            <line x1={xPx(m.value)} x2={xPx(m.value)} y1={padT} y2={padT + ih}
-              stroke={m.color || 'var(--fg-muted)'} strokeWidth="1.5" strokeDasharray="4 3" opacity="0.9" />
-            {m.label && (
-              <text x={xPx(m.value)} y={padT - 4} textAnchor="middle" fontSize="9" fontFamily="var(--font-mono)"
-                fill={m.color || 'var(--fg-muted)'} style={{ letterSpacing: '0.04em' }}>{m.label}</text>
-            )}
-          </g>
-        ))}
-        {/* hover crosshair */}
-        {hover != null && (
-          <line x1={(xPx(bins[hover].x0) + xPx(bins[hover].x1)) / 2} x2={(xPx(bins[hover].x0) + xPx(bins[hover].x1)) / 2}
-            y1={padT} y2={padT + ih} stroke="var(--orange)" strokeWidth="1" opacity="0.7" />
-        )}
-        <ChartWatermark x={width - 20} y={padT + 16} />
-      </svg>
-      {hover != null && (() => {
-        const b = bins[hover];
-        const cx = (xPx(b.x0) + xPx(b.x1)) / 2;
-        const share = (metric(b) / total) * 100;
-        const rangeLabel = b._label ?? `${fmtEdge(b.x0)} – ${fmtEdge(b.x1)}`;
-        // Allow legacy `valueFormatter` to override the SDK's `valueFormat`.
-        const fmt = valueFormatter || valueFormat;
-        return (
-          <div className="chart-tooltip" style={{ left: Math.min(cx + 12, width - 180), top: 10 }}>
-            <div className="t-date">{rangeLabel}</div>
-            <div className="t-row"><span className="t-label">{countLabel}</span><span>{b.count}</span></div>
-            {weighted && (
-              <div className="t-row"><span className="t-label">{valueLabel || yLabel || 'Value'}</span><span>{fmt(b.weight, 2)}</span></div>
-            )}
-            <div className="t-row"><span className="t-label">Share</span><span>{share.toFixed(1)}%</span></div>
-          </div>
-        );
-      })()}
-    </div>
-  );
-}
-
-// ── HealthFactorHistogram ────────────────────────────────
-//
-// SDK preset wrapper over Histogram for HF distributions. Two modes:
-//   mode='usd'   bar height = Σ debtUsd in that HF bin (dollars at risk)
-//   mode='count' bar height = number of positions in that HF bin
-//
-// Baked-in markers at HF=1 ("Liquidation") and HF=1.5 ("buffer"), colour
-// bands red < 1 / yellow 1–1.5 / green ≥ 1.5, axis labels. Drops the manual
-// legend hack the Risk page used to build — those are now properties of the
-// chart itself.
-//
-// Input: `positions: [{ hf: number, debtUsd?: number }]`.
-function HealthFactorHistogram({
-  positions = [], mode = 'usd', width = 480, height = 220, binCount = 24,
-  clampRange = [0, 3], showThreshold = true, markers, colorBands,
-}) {
-  const weighted = mode === 'usd';
-  const values = positions.map(p => p.hf);
-  const weight = weighted ? positions.map(p => p.debtUsd ?? 0) : undefined;
-
-  const defaultMarkers = [{ value: 1.0, label: 'Liquidation', color: 'var(--red)' }];
-  if (showThreshold) defaultMarkers.push({ value: 1.5, label: '1.5', color: 'var(--yellow)' });
-
-  const defaultBands = [
-    { from: 0, to: 1.0, color: 'var(--red)' },
-    { from: 1.0, to: 1.5, color: 'var(--yellow)' },
-    { from: 1.5, to: Infinity, color: 'var(--green)' },
-  ];
-
-  return (
-    <Histogram
-      values={values}
-      weight={weight}
-      binCount={binCount}
-      clampRange={clampRange}
-      width={width}
-      height={height}
-      color="var(--chart-1)"
-      valueFormat={weighted ? fmtUSD : ((n) => fmtNum(n, 0))}
-      markers={markers || defaultMarkers}
-      colorBands={colorBands || defaultBands}
-      xLabel="Health Factor"
-      yLabel={weighted ? 'Debt at risk' : 'Positions'}
-    />
-  );
-}
 
 // ── DataTable ────────────────────────────────────────────
 //
@@ -1025,4 +789,4 @@ function DataTable({ columns, rows, initialSort = null, emptyMessage = 'No rows.
   );
 }
 
-Object.assign(window, { AreaChart, StackedBarChart, Treemap, Sparkline, Leaderboard, Heatmap, Candlestick, Histogram, HealthFactorHistogram, DataTable });
+Object.assign(window, { AreaChart, StackedBarChart, Treemap, Sparkline, Leaderboard, Heatmap, Candlestick, DataTable });

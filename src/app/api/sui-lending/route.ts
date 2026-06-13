@@ -14,7 +14,6 @@ import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { listProtocols } from '@/protocols/registry';
 import { fetchScallopCanonicalTvl, fetchBucketCanonicalTvl } from '@/lib/prices';
-import { computeRiskModel, type McMarketInput } from '@/lib/risk-modeling';
 
 // ─── Per-protocol TVL formula ─────────────────────────────────────────────
 //
@@ -630,64 +629,16 @@ export async function GET() {
       asOf,
     });
 
-    // ── Risk modeling per §5 ───────────────────────────────────────────────
-    // Monte Carlo Loss-at-Risk on collateral price paths driving per-market
-    // Health Factor, a VaR ensemble (historical + Student-t df=4), Expected
-    // Shortfall, and an in/out-of-sample backtest. The standard treats these
-    // four as the minimum bar for a publishable risk dashboard.
-    //
-    // Inputs:
-    //   • sectorTvlSeries — daily sum across protocols from tvlSeries (which
-    //     already carries the DefiLlama fallback for sparse PoolDaily days),
-    //     so the realized vol calibration uses the same numbers the headline
-    //     TVL series shows.
-    //   • markets — every pool + vault we report, with its today HF + debt.
-    //     Pulled from `pools` / `vaults` rather than re-derived so a per-row
-    //     fix anywhere flows automatically into the modeling.
-    //
-    // Per-position HF would be ideal — Sui doesn't have public per-wallet
-    // position indexers for all 5 protocols, so we use the per-market
-    // aggregate HF as a proxy with a documented limitation surfaced on the
-    // Risk page.
-    const sectorTvlSeries: number[] = Array.from({ length: days }, (_, i) => {
-      let s = 0;
-      for (const arr of tvlSeries) {
-        const v = arr[i]?.value;
-        if (Number.isFinite(v)) s += v;
-      }
-      return s;
-    });
-
-    const mcMarkets: McMarketInput[] = [
-      ...pools.map((r) => ({
-        protocol: String(r.protocol),
-        sym: String(r.sym),
-        supplyUsd: Number(r.supply) || 0,
-        borrowUsd: Number(r.borrow) || 0,
-        healthFactor: r.healthFactor as number | null,
-      })),
-      ...vaults.map((r) => ({
-        protocol: String(r.protocol),
-        sym: String(r.sym),
-        supplyUsd: Number(r.collateralUsd) || 0,
-        borrowUsd: Number(r.debtUsd) || 0,
-        // Vault HF analog: collateralUsd × (1/minCR%) / debtUsd.
-        // minCR is null for non-CDP surfaces — HF is undefined there.
-        healthFactor: (r.debtUsd > 0 && r.minCR != null && r.minCR > 0)
-          ? (r.collateralUsd * (100 / r.minCR)) / r.debtUsd
-          : null,
-      })),
-    ];
-
-    const totalTvlUsdM = protocolMetrics.reduce((s, p) => s + (p.tvl || 0), 0);
-
-    const riskModel = computeRiskModel({
-      sectorTvlSeries,
-      markets: mcMarkets,
-      totalTvlUsdM,
-      paths: 5000,
-      horizonDays: 7,
-    });
+    // NOTE 2026-06: the §5 risk-modeling block (Monte Carlo LaR + VaR
+    // ensemble + ES + backtest) was removed here. It ran 5,000 simulated
+    // price paths on every request and fed the now-deleted Modeled-Risk
+    // panel — which itself was removed (RM-1) because the market-aggregate
+    // Health Factor it consumed is a utilisation ratio, not a real HF. With
+    // the panel gone, the computation produced a `riskModel` field nothing
+    // read, at real per-request cost. The simulator lives on in
+    // src/lib/risk-modeling.ts as a parked foundation for when per-wallet
+    // position indexing lands and position-level risk can be computed
+    // honestly; it is simply not called until then.
 
     return NextResponse.json({
       protocols,
@@ -705,7 +656,6 @@ export async function GET() {
       days,
       asOf,
       integrityGates,
-      riskModel,
       // Per-protocol oracle configuration (primary + documented secondaries).
       // Drives the Oracle-concentration panel honestly: Pyth is primary at
       // every protocol, 4 of 5 document a secondary feed. Only protocols we
