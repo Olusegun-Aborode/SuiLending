@@ -48,7 +48,29 @@ function Topbar({ title, onOpenCmdk, theme, setTheme }) {
           <span>🔍 Search protocols, markets…</span>
           <kbd>⌘K</kbd>
         </button>
-        <span className="live-pill"><span className="dot" />LIVE · 2s ago</span>
+        {(() => {
+          // Real data-freshness pill. Pool snapshots refresh once daily (cron),
+          // so a hardcoded "LIVE · 2s ago" was false. Show the true age of the
+          // latest snapshot, with the dot amber once a daily run looks missed.
+          const dataAsOf = (typeof window !== 'undefined' && window.SUI_LENDING_DATA && window.SUI_LENDING_DATA.dataAsOf) || null;
+          let label = 'no data', stale = true, title = 'No pool data loaded';
+          if (dataAsOf) {
+            const ageMs = Date.now() - new Date(dataAsOf).getTime();
+            const h = ageMs / 3600000;
+            stale = h > 26; // daily cadence: >~26h means a refresh was missed
+            const ageStr = ageMs < 60000 ? 'just now'
+              : ageMs < 3600000 ? `${Math.round(ageMs / 60000)}m ago`
+              : h < 48 ? `${Math.round(h)}h ago`
+              : `${Math.round(h / 24)}d ago`;
+            label = `Updated ${ageStr}`;
+            title = `Pool data as of ${new Date(dataAsOf).toISOString().replace('T', ' ').slice(0, 16)} UTC. On-chain snapshots refresh once daily.`;
+          }
+          return (
+            <span className="live-pill" title={title}>
+              <span className="dot" style={{ background: stale ? 'var(--orange)' : 'var(--green)' }} />{label}
+            </span>
+          );
+        })()}
         <div className="theme-toggle" role="tablist" aria-label="Theme">
           <button className={theme === 'light' ? 'active' : ''} onClick={() => setTheme('light')} title="Light">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>

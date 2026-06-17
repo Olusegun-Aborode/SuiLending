@@ -1110,9 +1110,9 @@ function ProtocolComparisonTable() {
         </span>
       ),
     },
-    { id: 'supplyApy', label: 'Sup. APY', sortable: true, numeric: true,
+    { id: 'supplyApy', label: 'Sup. APY (base)', sortable: true, numeric: true,
       render: (r) => <span style={{ color: 'var(--green)' }}>{r.supplyApy.toFixed(2)}%</span> },
-    { id: 'borrowApy', label: 'Bor. APY', sortable: true, numeric: true,
+    { id: 'borrowApy', label: 'Bor. APY (base)', sortable: true, numeric: true,
       render: (r) => <span style={{ color: 'var(--red)' }}>{r.borrowApy.toFixed(2)}%</span> },
     { id: 'feesAnnual', label: 'Fees (annual)', sortable: true, numeric: true, render: (r) => fmtUSD(r.feesAnnual, 1) },
     { id: 'takeRate', label: 'Take Rate', sortable: true, numeric: true,
@@ -1346,10 +1346,10 @@ function PageProtocol() {
                   <th style={{ padding: 8 }}>Asset</th>
                   <th style={{ padding: 8 }}>Supply</th>
                   <th style={{ padding: 8 }}>Borrow</th>
-                  <th style={{ padding: 8 }}>Supply APY</th>
-                  <th style={{ padding: 8 }}>Borrow APY</th>
+                  <th style={{ padding: 8 }} title="Base supply interest rate, excluding token incentives">Supply APY (base)</th>
+                  <th style={{ padding: 8 }} title="Base borrow interest rate, excluding token incentives">Borrow APY (base)</th>
                   <th style={{ padding: 8 }}>Util</th>
-                  <th style={{ padding: 8 }}>LTV</th>
+                  <th style={{ padding: 8 }} title="Collateral factor (max borrow LTV). The protocol's own app may label its liquidation threshold as 'Max LTV', which is a higher number.">LTV</th>
                   <th style={{ padding: 8 }}>Risk</th>
                   <th style={{ padding: 8 }}></th>
                 </tr>
@@ -1446,7 +1446,7 @@ function PageRates() {
           title="Lending markets: rates, utilization, supply"
           caption="every pool across the 4 pool-archetype protocols"
           protocolMode="single"
-          description="Snapshot of all lending markets on Sui from the four pool-archetype protocols (NAVI, Suilend, Scallop, AlphaLend). Click a row to drill into the market. Sort by any column from the dropdown. Spread = borrow APY − supply APY (what the protocol + suppliers split). Kink = utilization where the IRM bends into the jump-rate regime."
+          description="Snapshot of all lending markets on Sui from the four pool-archetype protocols (NAVI, Suilend, Scallop, AlphaLend). Click a row to drill into the market. Sort by any column from the dropdown. Spread = borrow APY − supply APY (what the protocol + suppliers split). Kink = utilization where the IRM bends into the jump-rate regime. Supply/Borrow APY are BASE interest rates and exclude token incentives, so they read lower (supply) and higher (borrow) than each protocol's own app, which shows incentive-adjusted rates."
           metricItems={[
             { id: 'supplyApy',  label: 'Sort: Supply APY' },
             { id: 'borrowApy',  label: 'Sort: Borrow APY' },

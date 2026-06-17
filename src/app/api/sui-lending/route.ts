@@ -703,6 +703,13 @@ export async function GET() {
       // a "recheck due" warning. This is the guardrail that stops the map
       // silently going stale-wrong the way the old "100% Pyth" claim did.
       oracleConfigMeta: oracleConfigFreshness(new Date(asOf.serverTime).getTime()),
+      // Real data-freshness: the timestamp of the most recent pool snapshot the
+      // collect-pools cron wrote. This is what drives the topbar freshness pill
+      // — distinct from asOf.checkpointTimestamp (a live Sui RPC read that is
+      // always seconds-fresh and says nothing about how old the pool data is).
+      dataAsOf: latestRows.length
+        ? new Date(Math.max(...latestRows.map(r => new Date(r.timestamp).getTime()))).toISOString()
+        : null,
       generatedAt: new Date().toISOString(),
     }, {
       headers: {
