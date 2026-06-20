@@ -237,7 +237,7 @@ defineDetector<SuiAgg>({
         message: `${protoName(agg, p.protocol)} ${p.sym} flagged high risk · util ${p.util.toFixed(1)} · supply ${fmtM(p.supply)}`,
         fingerprint: `sui.high-risk-pool:${p.protocol}:${p.sym}`,
         linkPath: '/',
-        payload: { protocol: p.protocol, sym: p.sym, util: p.util, supply: p.supply },
+        payload: { protocol: p.protocol, sym: p.sym, util: p.util, supply: p.supply, exposureUsd: p.supply * 1e6 },
       }));
   },
 });
